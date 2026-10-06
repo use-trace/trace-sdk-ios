@@ -212,8 +212,8 @@ Until it is set, the SDK still registers the install with Apple, but no postback
   neither this SDK nor Trace can join an iOS install to the person or the web journey that led to it.
 - **A reinstall counts as a new install.** The id does not survive the app being deleted, by design, so a
   reinstall mints a fresh one.
-- **An app ended before the person answers loses what was held.** Nothing is stored before consent, so the held
-  first open and conversions are in memory only. The next launch finds no first open flag and records a first open
+- **An app ended before the person answers loses what was held.** The held first open and conversions are not
+  stored before consent, only kept in memory. The next launch finds no first open flag and records a first open
   again, with that launch's time, so the install is still reported once the person agrees.
 - **Offline at the moment consent is granted loses what was held.** The SDK tries each send three times and then
   gives up, and nothing a grant flushed is kept, including the first open. A queue that outlived the answer would be
