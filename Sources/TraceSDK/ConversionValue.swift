@@ -1,5 +1,4 @@
 import Foundation
-import os
 #if os(iOS)
 import AdAttributionKit
 import StoreKit
@@ -37,11 +36,11 @@ protocol ConversionValueRegistrar: Sendable {
 /// A flag is set only after Apple took the update: a registration that failed is tried again on the next launch,
 /// because a missed one means no postback ever.
 ///
-/// **A flag is written only once the person has granted consent.** Nothing is stored before consent, a flag with no
-/// identity in it included (decided 6 October 2026). Until a grant, a flag is kept in memory, so within one launch
-/// the install is still registered once; the grant writes what was kept, and a refusal writes nothing. So a launch
-/// with no grant registers the install again, and a conversion raises the value again. See the README's known
-/// limits for what that costs.
+/// **The flags are written whatever the consent state** (decided 6 October 2026). They are the one thing the SDK
+/// stores before an answer, and they hold no identifier: each is an empty file saying what the SDK has told Apple.
+/// They are on disk so that a later launch does not register again, which would reset the value to fine 0, coarse
+/// `low` and could undo a value the host app set. Kept in memory, they were lost with the process, and a person who
+/// never answered had their install registered again on every launch.
 ///
 /// It is safe to call from anywhere; the order of calls is the caller's to keep.
 struct ConversionValues: Sendable {
@@ -58,14 +57,6 @@ struct ConversionValues: Sendable {
     private let directory: URL
     private let registrar: any ConversionValueRegistrar
     private let log: TraceLog
-
-    private struct Kept: Sendable {
-        var granted = false
-        var flags: Set<String> = []
-    }
-
-    /// The flags set while consent is not granted, and whether it is.
-    private let kept = OSAllocatedUnfairLock(initialState: Kept())
 
     init(directory: URL = Storage.defaultDirectory, registrar: any ConversionValueRegistrar, log: TraceLog = .silent) {
         self.directory = directory
@@ -105,28 +96,12 @@ struct ConversionValues: Sendable {
         }
     }
 
-    /// The person's answer. A grant writes the flags kept so far, and from then on they are written as they are set;
-    /// a refusal writes nothing, and from then on they are kept in memory again.
-    func consentAnswered(granted: Bool) {
-        let flags = kept.withLock { kept in
-            kept.granted = granted
-            guard granted else { return Set<String>() }
-            defer { kept.flags = [] }
-            return kept.flags
-        }
-        for flag in flags.sorted() { Storage.setFlag(flag, in: directory, log: log) }
-    }
-
     private func flagIsSet(_ flag: String) -> Bool {
-        kept.withLock { $0.flags.contains(flag) } || Storage.flagIsSet(flag, in: directory)
+        Storage.flagIsSet(flag, in: directory)
     }
 
     private func setFlag(_ flag: String) {
-        let write = kept.withLock { kept in
-            if !kept.granted { kept.flags.insert(flag) }
-            return kept.granted
-        }
-        if write { Storage.setFlag(flag, in: directory, log: log) }
+        Storage.setFlag(flag, in: directory, log: log)
     }
 
     // Never throws. A StoreKit error is the SDK's problem, not the host app's: it is logged and swallowed.

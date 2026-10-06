@@ -1,7 +1,8 @@
 import Foundation
 
-/// Where the SDK keeps the little it keeps on disk: the install id and a few flags, all written only once the person
-/// has granted consent. Nothing is written here before that.
+/// Where the SDK keeps the little it keeps on disk: the install id and a few flags. The install id and the first open
+/// flag are written only once the person has granted consent. The two Apple flags, empty and holding no identifier,
+/// are written whatever the consent state, so a later launch does not register with Apple again.
 ///
 /// **Application Support, with every file marked excluded from backup.** Not the Keychain: Keychain items survive
 /// the app being deleted on iOS, so anything kept there would outlive an uninstall. Not `UserDefaults` either: it is
