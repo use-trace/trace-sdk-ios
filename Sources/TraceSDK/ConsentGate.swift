@@ -64,18 +64,24 @@ actor ConsentGate {
     /// The queue file is gone from disk when this returns, flushed or discarded. A send the server did not take is
     /// not kept: the transport has tried three times, and a file that outlives the answer is one some later launch
     /// sends again.
-    func setConsent(analytics: Bool, marketing: Bool) async {
+    ///
+    /// **Returns false, having changed nothing, when the install id exists and cannot be read**, which on iOS is the
+    /// phone before its first unlock after a reboot. A grant then would flush the held events without the consent
+    /// call that must go before them, and a refusal could not withdraw under the id it cannot read. So the state, the
+    /// queue and the server are left as they were, and the caller asks again later.
+    @discardableResult
+    func setConsent(analytics: Bool, marketing: Bool) async -> Bool {
         await inOrder { await self.setConsentNow(analytics: analytics, marketing: marketing) }
     }
 
-    private func inOrder(_ work: @escaping @Sendable () async -> Void) async {
+    private func inOrder<T: Sendable>(_ work: @escaping @Sendable () async -> T) async -> T {
         let before = latest
         let current = Task {
             await before?.value
-            await work()
+            return await work()
         }
-        latest = current
-        await current.value
+        latest = Task { _ = await current.value }
+        return await current.value
     }
 
     private func recordNow(_ event: Event) async {
@@ -93,11 +99,26 @@ actor ConsentGate {
         }
     }
 
-    private func setConsentNow(analytics: Bool, marketing: Bool) async {
+    private func setConsentNow(analytics: Bool, marketing: Bool) async -> Bool {
+        let key: String?
+        if analytics {
+            key = InstallId.get(in: directory)
+            if key == nil {
+                log.log("the install id cannot be read or stored yet, so the grant waits and nothing is sent")
+                return false
+            }
+        } else {
+            let stored = InstallId.read(in: directory)
+            if stored == .unreadable {
+                log.log("the install id cannot be read yet, so the refusal waits and nothing is sent or discarded")
+                return false
+            }
+            key = InstallId.peek(in: directory)
+        }
         state = analytics ? .granted : .denied
         let held = readHeld()
 
-        if let key = analytics ? InstallId.get(in: directory) : InstallId.peek(in: directory) {
+        if let key {
             _ = await sender.sendConsent(key: key, analytics: analytics, marketing: marketing)
         } else {
             log.log("consent refused before this install had an identity, so there is nothing to withdraw")
@@ -114,6 +135,7 @@ actor ConsentGate {
             log.log("consent refused, discarding \(held.count) held event(s)")
         }
         clearHeld()
+        return true
     }
 
     private func hold(_ event: Event) {

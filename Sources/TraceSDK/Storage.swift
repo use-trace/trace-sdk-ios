@@ -12,12 +12,22 @@ enum Storage {
     /// The SDK's own directory inside Application Support. Created on the first write, not before.
     static let defaultDirectory: URL = URL.applicationSupportDirectory.appending(path: "io.usetrace.sdk", directoryHint: .isDirectory)
 
+    /// Atomic, and protected until the first unlock after a boot. Chosen, not left to the default.
+    ///
+    /// `completeUntilFirstUserAuthentication`: encrypted at rest, and readable from the first unlock after a boot
+    /// until the next shutdown, locked or not. `complete` would make the install id unreadable every time the phone
+    /// locks, so a send finishing in the background on a locked phone would find no id. `none` would leave a visitor
+    /// identity unencrypted on the disk. The price of this level is the window between a boot and the first unlock,
+    /// when the file exists and cannot be read; ``InstallId/get(in:)`` sends and mints nothing in that window rather
+    /// than treat the unreadable id as a missing one.
+    static let writingOptions: Data.WritingOptions = [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+
     /// Writes `data` to `file` whole, creating the directory if it is missing, and marks the file excluded from
     /// backup. The mark is set after every write because an atomic write replaces the file, and a replaced file
     /// does not keep the old one's resource values.
     static func write(_ data: Data, to file: URL) throws {
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: file, options: .atomic)
+        try data.write(to: file, options: writingOptions)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
         var file = file

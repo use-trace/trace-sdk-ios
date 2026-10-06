@@ -59,7 +59,7 @@ struct ConsentGateTests {
     }
 
     private func event(_ name: String, _ type: EventType = .custom) -> Event {
-        Event(type: type, anonUserKey: InstallId.get(in: directory), consentStatus: .unknown, eventName: name)
+        Event(type: type, anonUserKey: InstallId.get(in: directory)!, consentStatus: .unknown, eventName: name)
     }
 
     @Test func anEventRecordedWhileConsentIsUnknownIsNotSent() async {
@@ -171,10 +171,10 @@ struct ConsentGateTests {
         let gate = gate(sender)
         await gate.record(event("held"))
 
-        async let grant: Void = gate.setConsent(analytics: true, marketing: false)
+        async let grant = gate.setConsent(analytics: true, marketing: false)
         try await Task.sleep(for: .milliseconds(100))
         await gate.record(event("during"))
-        await grant
+        #expect(await grant)
 
         #expect(sender.calls == ["consent analytics=true marketing=false", "event held", "event during"])
     }
@@ -231,5 +231,24 @@ struct ConsentGateTests {
         await gate.record(event("signup"))
 
         #expect(try isExcludedFromBackup(queueFile) == true)
+    }
+
+    // Before the first unlock after a reboot the id file exists and cannot be read. A grant then would flush the
+    // held events with no consent call before them, and a refusal could not withdraw under the id. So neither
+    // changes anything: no call, the queue kept, the state still unknown, and false so the caller asks again.
+    @Test(arguments: [true, false])
+    func anAnswerWhileTheIdCannotBeReadChangesNothing(analytics: Bool) async throws {
+        let sender = RecordingSender()
+        let gate = gate(sender)
+        await gate.record(event("first open", .firstOpen))
+        let file = directory.appending(path: InstallId.fileName)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+
+        #expect(await gate.setConsent(analytics: analytics, marketing: false) == false)
+
+        #expect(sender.calls.isEmpty)
+        #expect(queueExists)
+        #expect(await gate.state == .unknown)
     }
 }
