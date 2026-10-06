@@ -39,23 +39,6 @@ struct EventTests {
         #expect(body["event_type"] as? String == "PURCHASE")
     }
 
-    @Test func anEventReadBackFromItsOwnJSONIsTheEventThatWasWritten() throws {
-        let event = Event(type: .purchase, anonUserKey: placeholderKey, consentStatus: .unknown, appVersion: "2.1",
-                          eventName: "order", value: 12.5, conversionTypeId: "ct_1", conversionValue: 12.5,
-                          metadata: ["plan": "annual"])
-        #expect(Event(json: try #require(event.json())) == event)
-    }
-
-    @Test func aHalfWrittenLineIsNotAnEvent() {
-        #expect(Event(json: Data(#"{"event_type":"FIRST_OPEN","anon_us"#.utf8)) == nil)
-        #expect(Event(json: Data(#"{"event_type":"SOMETHING_NEWER","anon_user_key":"k","consent_status":"UNKNOWN","timestamp":"t","source_type":"app","platform":"ios","store":"app_store"}"#.utf8)) == nil)
-    }
-
-    @Test func anEventWrittenAsJSONHoldsNoNewlineSoALineIsAWholeEvent() throws {
-        let event = Event(type: .custom, anonUserKey: placeholderKey, consentStatus: .unknown, eventName: "a\nb")
-        #expect(try #require(event.json()).contains(UInt8(ascii: "\n")) == false)
-    }
-
     @Test func anEventCannotPrintItsOwnIdentity() {
         let event = Event(type: .custom, anonUserKey: placeholderKey, consentStatus: .unknown, eventName: "x")
         var dumped = ""

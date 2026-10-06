@@ -19,8 +19,7 @@ enum ConsentState: String, Codable, Sendable {
     case denied = "DENIED"
 }
 
-/// One event, in the shape `POST /v1/event` takes, and in the shape the consent gate holds it on disk, so the
-/// stored form cannot drift from the sent form.
+/// One event, in the shape `POST /v1/event` takes.
 ///
 /// `source_type`, `platform` and `store` are on every event: this SDK is an iOS app from the App Store and says so
 /// rather than relying on the server to infer it. The timestamp is taken when the event is made, not when it is
@@ -32,7 +31,8 @@ enum ConsentState: String, Codable, Sendable {
 struct Event: Codable, Sendable, Equatable {
 
     var type: EventType
-    /// The install id. Required on every event: the server refuses an install without one.
+    /// The install id. Required on every event sent: the server refuses an install without one. Empty while the event
+    /// is held, because before a grant there is no id, and the consent gate fills it in as it sends.
     var anonUserKey: String
     var consentStatus: ConsentState
     var timestamp: String = Event.now()
@@ -76,16 +76,6 @@ struct Event: Codable, Sendable, Equatable {
     /// Now, in the format the server's `IsDateString` accepts: UTC, with milliseconds.
     static func now() -> String {
         Date.now.formatted(Date.ISO8601FormatStyle(includingFractionalSeconds: true))
-    }
-}
-
-// In an extension so the struct keeps its memberwise initialiser.
-extension Event {
-    /// One event read back from its own JSON, or nil when the data is not one: a line a killed process left half
-    /// written, or a type or state a newer SDK queued before an app downgrade. Never throws.
-    init?(json: Data) {
-        guard let event = try? JSONDecoder().decode(Event.self, from: json) else { return nil }
-        self = event
     }
 }
 
