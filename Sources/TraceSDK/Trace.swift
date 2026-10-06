@@ -130,6 +130,11 @@ public enum Trace {
         return current
     }
 
+    /// Waits for everything called so far. Tests only.
+    static func idleForTest() async {
+        await client.withLock { $0 }?.idle()
+    }
+
     /// Waits for everything called so far, then forgets the client, which is what a process ending does. Tests only.
     static func resetForTest() async {
         await client.withLock { $0 }?.idle()
