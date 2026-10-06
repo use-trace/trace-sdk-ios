@@ -203,6 +203,79 @@ would say so.
 when it has. Apple uses only the registrable domain and ignores any subdomain, so it will be a domain of its own.
 Until it is set, the SDK still registers the install with Apple, but no postback reaches Trace.
 
+## What to declare to the stores
+
+This is what the SDK itself collects, for whoever answers the App Privacy questions in App Store Connect. **Your
+own app, and every other SDK in it, may collect more.** Declare that as well: the answers below are the part this
+SDK adds, not the whole of your app's label. They follow Apple's definitions as read on 6 October 2026, in
+[App privacy details on the App Store](https://developer.apple.com/app-store/app-privacy-details/).
+
+### The privacy manifest
+
+The package ships a privacy manifest, `Sources/TraceSDK/PrivacyInfo.xcprivacy`, as a resource of the `TraceSDK`
+target, so you add nothing. Xcode includes it when you archive your app and choose Generate Privacy Report, which is
+the report to check your answers against. It says:
+
+- **No tracking**, and no tracking domains.
+- **Collected:** Device ID, Product Interaction and Purchase History, each linked to the user, none used for
+  tracking, all for Analytics. The reasons are in the table below.
+- **No required reason API.** The SDK keeps its files in Application Support and reads only whether a flag file
+  exists (`Storage.swift`), which is not on Apple's list; it does not use `UserDefaults`, file timestamps, disk
+  space, system boot time or the active keyboards. CI fails if the code starts to use one the manifest does not
+  declare (`scripts/check-privacy-manifest.py`).
+
+### What leaves the device
+
+Nothing, until your app calls `setConsent(analytics: true)` (`ConsentGate.swift`). After that:
+
+| Sent | Where it comes from |
+| --- | --- |
+| The install id, a random value minted on the grant | `InstallId.swift` |
+| What happened: a first open, a purchase or another conversion, and when | `Event.swift`, `Trace.swift` |
+| The consent answers, with the install id, and the consent state of each event | `Transport.swift`, `ConsentGate.swift` |
+| Your app's version (`CFBundleShortVersionString`), and that this is an iOS app from the App Store | `Trace.swift`, `Event.swift` |
+| A conversion's name, value and metadata, as your app passes them | `Trace.swift` |
+| The SDK's version and the iOS version, in the user agent | `Transport.swift` |
+
+Like any request, it reaches Trace from the device's IP address. Trace uses that to apply rate limits and the
+site's excluded IP list, and does not store it.
+
+The SDK sends no advertising identifier, no vendor identifier, no name, email address or account id, no location,
+no contacts, no device model and nothing from other apps. It shows no App Tracking Transparency prompt and needs
+none.
+
+Registering the install with Apple at first launch (`ConversionValue.swift`) sends nothing to Trace. Apple's own
+system sends the campaign to the postback domain later, at campaign level, with no identifier for the person or the
+device. That is data Apple collects, so the SDK's manifest does not declare it; Apple's page says you are "not
+responsible for disclosing data collected by Apple".
+
+### Answers in App Store Connect
+
+**Do you or your third-party partners collect data from this app?** Yes, once your app grants consent through
+`setConsent`. App Store Connect has no answer for "only with consent".
+
+| Data type | What the SDK sends | Linked to the user | Used for tracking | Purpose |
+| --- | --- | --- | --- | --- |
+| Identifiers: Device ID | The install id | Yes | No | Analytics |
+| Usage Data: Product Interaction | The first open, and each conversion with its name and metadata | Yes | No | Analytics |
+| Purchases: Purchase History | A conversion's value, and a conversion named `purchase` | Yes | No | Analytics |
+
+Leave out Purchase History only if your app never passes a value and never records `purchase`.
+
+**Linked to the user**, because every one of them is sent with the install id. That id is a pseudonymous
+identifier, which is personal data under UK and EU GDPR, and Apple counts personal data as linked.
+
+**Not used for tracking**, because Apple's tracking means combining data from your app with data from other
+companies' apps or websites for advertising, or passing it to a data broker. Trace keeps what your app sends to
+your own account, combines it with nothing from other companies, and sells it to nobody, and the SDK reads no
+advertising identifier.
+
+**Analytics** is the purpose: Trace uses the data to report which campaigns and channels brought installs and
+conversions. It is not used to show ads or send marketing, so neither advertising purpose applies.
+
+Anything your app puts in a conversion's metadata is collected too. Put nothing identifying in it; if you do, it has
+to be declared as well.
+
 ## Known limits
 
 - **An iOS install arrives at Trace as direct.** iOS has no install referrer, so the first open cannot say which

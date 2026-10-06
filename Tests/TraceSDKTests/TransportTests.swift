@@ -112,6 +112,30 @@ struct TransportTests {
         #expect((body["timestamp"] as? String)?.wholeMatch(of: /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z/) != nil)
     }
 
+    // The store declarations (README.md, "What to declare to the stores", and Sources/TraceSDK/PrivacyInfo.xcprivacy)
+    // say what leaves the device. This is that list, read off the wire with every field filled in. A field added to
+    // an event or to the consent call fails here until the declarations say what it is and this list names it.
+    @Test func everyFieldThatLeavesTheDeviceIsOneTheStoreDeclarationsName() async {
+        let declared: Set<String> = [
+            // The install id, and what kind of client sent it.
+            "anon_user_key", "source_type", "platform", "store",
+            // The event: what happened, when, under which consent answer, and on which version of the app.
+            "event_type", "timestamp", "consent_status", "app_version",
+            // A conversion: the app's name for it, its value and its metadata. The SDK never fills in the two
+            // conversion_ fields today; they are named so that starting to send them is still a change seen here.
+            "event_name", "value", "metadata", "conversion_type_id", "conversion_value",
+            // The consent call: the two answers.
+            "consent_analytics", "consent_marketing",
+        ]
+        let server = StubServer()
+        _ = await transport(server).send(Event(type: .purchase, anonUserKey: placeholderKey, consentStatus: .granted,
+                                               appVersion: "1.0", eventName: "purchase", value: 1,
+                                               conversionTypeId: "ct", conversionValue: 1, metadata: ["plan": "plus"]))
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false)
+        #expect(server.requests.count == 2)
+        #expect(Set(server.requests.flatMap { $0.json.keys }) == declared)
+    }
+
     // Real campaign names carry quotes, tabs, control characters and emoji. A writer that produces invalid JSON on
     // any of them loses the event.
     @Test func anAwkwardNameArrivesAsJSONTheServerCanParse() async throws {

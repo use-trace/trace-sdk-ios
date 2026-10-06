@@ -60,13 +60,15 @@ jobs:
           xcodebuild test -scheme TraceSDK -destination "platform=iOS Simulator,id=$udid"
 
   # The rules in CLAUDE.md under "Not negotiable", checked in code: no advertising identifier, no Keychain, no
-  # identify, logging only through TraceLog, no dependencies.
+  # identify, logging only through TraceLog, no dependencies. Then the privacy manifest: valid, declaring every
+  # required reason API the code uses, and inside the built package. macOS, because that needs the iOS SDK.
   privacy:
     name: privacy
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - run: scripts/check-privacy.sh
+      - run: scripts/check-privacy-manifest.py
 
   # The public interface compared with api/TraceSDK.swiftinterface, so any change to it is visible and reviewed.
   api:

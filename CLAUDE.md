@@ -56,3 +56,9 @@ Needs full Xcode with its licence accepted. The core tests run with `swift test`
 CI also checks the rules above (`scripts/check-privacy.sh`) and the public API (`scripts/check-api.sh`, against
 `api/TraceSDK.swiftinterface`). After a deliberate change to anything public, run `scripts/check-api.sh --update`
 and commit the file with the change.
+
+**The privacy manifest is a statement every customer's app makes to Apple.** `Sources/TraceSDK/PrivacyInfo.xcprivacy`
+and the README's "What to declare to the stores" say what leaves the device. Sending a new field, or using a required
+reason API, changes both, in the same pull request. `scripts/check-privacy-manifest.py` (in the `privacy` job) fails
+on an undeclared required reason API, a value Apple does not list, or a package built without the manifest, and
+`everyFieldThatLeavesTheDeviceIsOneTheStoreDeclarationsName` fails on a new field.
