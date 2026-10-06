@@ -33,7 +33,7 @@ struct TraceClientTests {
     }
 
     @Test func theFirstOpenFlagIsExcludedFromBackup() async throws {
-        await launch(RecordingSender())
+        await launch(RecordingSender()) { $0.setConsent(analytics: true, marketing: false) }
 
         #expect(try isExcludedFromBackup(directory.appending(path: TraceClient.firstOpenFlag)) == true)
     }
@@ -54,9 +54,8 @@ struct TraceClientTests {
         await client.idle()
 
         #expect(sender.calls.isEmpty, "nothing may be sent while the install id cannot be read")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
-                == [ConversionValues.registeredFlag, ConversionValues.raisedFlag, InstallId.fileName].sorted(),
-                "no new id, no first open flag and no held queue may be written")
+        #expect(try written() == [InstallId.fileName],
+                "no new id, no first open flag, no held queue and no conversion value flag may be written")
 
         // The phone is unlocked. The next call runs what waited, in the order it was called, under the first id.
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
@@ -124,6 +123,96 @@ struct TraceClientTests {
 
         #expect(sender.calls == ["consent analytics=true marketing=false", "event FIRST_OPEN"])
         #expect(registrar.updates == ["0 low"])
+    }
+
+    // Decided 6 October 2026, before the first release: nothing is stored before consent. The first open waits in
+    // memory only; the id and the install are written the moment the person accepts, and a refusal never writes an
+    // identifier. These are that decision as tests, over the directory the SDK writes to.
+
+    /// Every file the SDK has written to its directory.
+    private func written() throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
+    }
+
+    @Test func aFreshInstallThatNeverAnswersWritesNoFileAtAll() async throws {
+        let sender = RecordingSender()
+        let registrar = FakeRegistrar()
+
+        await launch(sender, registrar) { $0.conversion("purchase", value: 9.99, metadata: [:]) }
+
+        #expect(try written().isEmpty, "nothing may be written to the device before the person has answered")
+        #expect(sender.calls.isEmpty)
+        #expect(InstallId.peek(in: directory) == nil)
+        // Apple is still told, because that needs no Trace consent; only the record of having told it waits.
+        #expect(registrar.updates == ["0 low", "0 medium"])
+    }
+
+    @Test func aRefusalWritesNoIdentifierAndSendsNothing() async throws {
+        let sender = RecordingSender()
+
+        await launch(sender) {
+            $0.conversion("purchase", value: 9.99, metadata: [:])
+            $0.setConsent(analytics: false, marketing: true)
+        }
+
+        #expect(try written().isEmpty, "a refusal may write nothing at all")
+        #expect(sender.calls.isEmpty)
+    }
+
+    @Test func acceptanceWritesTheIdSendsExactlyOneFirstOpenWithItThenTheHeldEventsInOrder() async throws {
+        let sender = RecordingSender()
+
+        await launch(sender) {
+            $0.conversion("signup", value: nil, metadata: [:])
+            $0.conversion("purchase", value: 9.99, metadata: [:])
+            $0.setConsent(analytics: true, marketing: false)
+        }
+
+        let id = try #require(InstallId.peek(in: directory), "the grant should have written the install id")
+        #expect(try written() == [TraceClient.firstOpenFlag, InstallId.fileName, ConversionValues.registeredFlag,
+                                  ConversionValues.raisedFlag].sorted())
+        #expect(sender.calls == [
+            "consent analytics=true marketing=false",
+            "event FIRST_OPEN",
+            "event signup",
+            "event purchase",
+        ])
+        #expect(sender.consentKeys == [id])
+        #expect(sender.events.map(\.anonUserKey) == [id, id, id])
+    }
+
+    @Test func aConversionHeldBeforeAcceptanceIsSentAfterIt() async throws {
+        let sender = RecordingSender()
+        let client = client(sender)
+        client.launch()
+        client.conversion("purchase", value: 9.99, metadata: [:])
+        await client.idle()
+        #expect(sender.calls.isEmpty)
+
+        client.setConsent(analytics: true, marketing: false)
+        await client.idle()
+
+        let purchase = try #require(sender.events.first { $0.type == .purchase })
+        #expect(sender.calls.last == "event purchase")
+        #expect(purchase.consentStatus == .granted)
+        #expect(purchase.anonUserKey == InstallId.peek(in: directory))
+        #expect(purchase.value == 9.99)
+    }
+
+    @Test func aRestartBeforeAnyAnswerIsAFirstOpenAgain() async throws {
+        await launch(RecordingSender()) { $0.conversion("signup", value: nil, metadata: [:]) }
+
+        // The app is killed with its banner still on screen. Nothing was written, so the next launch knows nothing
+        // of this one: the held conversion is lost, which is the accepted cost, and the install is new.
+        #expect(try written().isEmpty)
+
+        let sender = RecordingSender()
+        let registrar = FakeRegistrar()
+        await launch(sender, registrar) { $0.setConsent(analytics: true, marketing: false) }
+
+        #expect(sender.calls == ["consent analytics=true marketing=false", "event FIRST_OPEN"])
+        #expect(sender.events.first?.anonUserKey == InstallId.peek(in: directory))
+        #expect(registrar.updates == ["0 low"], "no record of registering was kept, so it registers again")
     }
 
     // The server keeps metadata keys of letters, digits and underscores and drops the rest without a word.
