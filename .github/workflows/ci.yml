@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  copy-rules:
+    name: copy rules
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: No em dashes or en dashes
+        run: |
+          git ls-files -z | python3 -c '
+          import sys
+          bad = []
+          for path in sys.stdin.buffer.read().split(b"\0"):
+              if not path:
+                  continue
+              for n, line in enumerate(open(path, "rb").read().decode("utf-8", "replace").splitlines(), 1):
+                  if chr(0x2013) in line or chr(0x2014) in line:
+                      bad.append(f"{path.decode()}:{n}")
+          print("\n".join(bad))
+          sys.exit(1 if bad else 0)
+          '
+
+  test:
+    name: test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift test
+
+  build-ios:
+    name: build ios
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -version
+      - run: xcodebuild -scheme TraceSDK -destination 'generic/platform=iOS Simulator' build
