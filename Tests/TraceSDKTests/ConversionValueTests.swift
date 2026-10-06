@@ -25,14 +25,36 @@ final class FakeRegistrar: ConversionValueRegistrar {
 }
 
 /// The conversion value over real flag files in a temporary directory. A new ``ConversionValues`` over the same
-/// directory stands in for a new launch.
+/// directory stands in for a new launch, on which consent was granted unless a test says otherwise: before a grant
+/// the flags are kept in memory only.
 struct ConversionValueTests {
 
     let directory = temporaryDirectory()
     let capture = LogCapture()
 
-    private func values(_ registrar: FakeRegistrar) -> ConversionValues {
-        ConversionValues(directory: directory, registrar: registrar, log: capture.log)
+    private func values(_ registrar: FakeRegistrar, granted: Bool = true) -> ConversionValues {
+        let values = ConversionValues(directory: directory, registrar: registrar, log: capture.log)
+        if granted { values.consentAnswered(granted: true) }
+        return values
+    }
+
+    // Nothing is stored before consent, a flag with no identity in it included. Within the launch the flag is kept in
+    // memory, so the install is still registered once; a grant writes it, a refusal does not.
+    @Test(arguments: [true, false])
+    func theFlagsAreKeptInMemoryUntilAGrantWritesThem(granted: Bool) async throws {
+        let registrar = FakeRegistrar()
+        let values = values(registrar, granted: false)
+
+        await values.registerInstall()
+        await values.registerInstall()
+        await values.conversionRecorded()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+        #expect(registrar.updates == ["0 low", "0 medium"])
+
+        values.consentAnswered(granted: granted)
+
+        let expected = granted ? [ConversionValues.registeredFlag, ConversionValues.raisedFlag].sorted() : []
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted() == expected)
     }
 
     // The whole reason this file exists: Apple sends no postback unless the app updates the value once.

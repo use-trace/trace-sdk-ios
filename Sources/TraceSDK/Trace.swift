@@ -21,6 +21,11 @@ import os
 /// made, so a conversion can never overtake the consent call that has to go before it. A call before
 /// ``initialise(_:)`` does nothing and says so in the log.
 ///
+/// **Nothing is written to the device before consent.** Before the person has answered, the first open and every
+/// conversion are held in memory only, and no install id exists. A grant writes the install id, the first open flag
+/// once the first open has been sent, and the record of having registered with Apple. A refusal writes nothing. An
+/// app killed before an answer loses what was held, and its next launch records a first open again.
+///
 /// **Before the first unlock after a reboot it waits.** An app launched in the background then, by a push or a
 /// background refresh, finds the install id's file and cannot read it, because iOS has not decrypted it yet. The SDK
 /// then sends nothing and mints nothing, because a new id would make one install two, and the calls made meanwhile
@@ -33,8 +38,9 @@ public enum Trace {
     /// Starts the SDK, registers the install with Apple, and records the first open. Call it once, as early in the
     /// launch as the app can, before ``setConsent(analytics:marketing:)``. A second call does nothing.
     ///
-    /// The first open is recorded once, ever, and held with everything else until ``setConsent(analytics:marketing:)``
-    /// says what the person answered. An app that never calls it sends nothing, which is correct rather than a bug.
+    /// The first open is held in memory with everything else until ``setConsent(analytics:marketing:)`` says what the
+    /// person answered, and it is sent once, ever. An app that never calls it sends nothing and stores nothing, which
+    /// is correct rather than a bug.
     ///
     /// Registering with Apple does not wait for consent: it sends nothing to Trace and no identity anywhere. See
     /// ``setConversionValue(fine:coarse:)``.
@@ -53,8 +59,9 @@ public enum Trace {
     /// `analytics` decides whether events are sent. `marketing` goes to Trace for the consent record and decides
     /// nothing here, so `analytics: false` discards what was held whatever `marketing` says.
     ///
-    /// A grant sends the consent record, then everything held, oldest first. A refusal sends the consent record,
-    /// which withdraws an earlier grant, and throws away everything held. **Call it on every launch**, from the
+    /// A grant writes the install id if there is none yet, sends the consent record, then everything held, oldest
+    /// first. A refusal throws away everything held and writes nothing; when an earlier grant left an install id, it
+    /// also sends the consent record, which withdraws that grant. **Call it on every launch**, from the
     /// answer the app stored: the SDK does not keep the answer, because the consent record is the app's to show,
     /// change and withdraw, and two copies of it would disagree.
     public static func setConsent(analytics: Bool, marketing: Bool) {
@@ -93,8 +100,8 @@ public enum Trace {
     ///
     /// **Public because a person's rights depend on it.** Someone asking what Trace holds about them, or asking for
     /// it to be deleted, has to find their identifier first, and an app has no browser settings to look in, so the
-    /// app shows it on its own privacy screen. Nil before ``initialise(_:)``, nil until something has been recorded,
-    /// and nil before the first unlock after a reboot. Reading it creates nothing and sends nothing.
+    /// app shows it on its own privacy screen. Nil before ``initialise(_:)``, nil until the person has granted
+    /// consent, and nil before the first unlock after a reboot. Reading it creates nothing and sends nothing.
     ///
     /// It is a visitor identity: show it to the person it belongs to, and do not log it or send it anywhere else.
     public static var installId: String? {
@@ -167,6 +174,8 @@ actor TraceClient {
     // ponytail: unbounded, and only ever filled between a reboot and the first unlock, by a background launch. Bound
     // it if an app is found calling Trace in a loop in that window.
     private var waiting: [Waiting] = []
+    /// Whether this launch has recorded its first open. In memory only: the flag on disk is written when it is sent.
+    private var firstOpenRecorded = false
     private nonisolated let tail = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
     init(directory: URL = Storage.defaultDirectory, sender: any EventSender, registrar: any ConversionValueRegistrar,
@@ -197,7 +206,7 @@ actor TraceClient {
         }
         reportWhatTheServerWouldDrop(metadata)
         // Made here, on the calling thread, so its timestamp is when it happened rather than when the queue reached
-        // it. The key is filled in when it runs, because it may not be readable yet.
+        // it. The key is filled in by the consent gate when it is sent, because before a grant there is none.
         let event = Event(type: name.lowercased() == "purchase" ? .purchase : .custom, anonUserKey: "",
                           consentStatus: .unknown, appVersion: Self.appVersion, eventName: name, value: value,
                           metadata: metadata.isEmpty ? nil : metadata)
@@ -228,18 +237,17 @@ actor TraceClient {
         }
     }
 
-    // Adds `next` to what is waiting, then runs everything that can run, in order, stopping at the first thing that
-    // needs the install id while it cannot be read. The first open goes first: it is the oldest thing there is.
+    // Adds `next` to what is waiting, then runs everything that can run, in order, stopping at an answer that needs
+    // the install id while it cannot be read. The first open goes first: it is the oldest thing there is.
     private func run(_ next: Waiting?) async {
         if let next { waiting.append(next) }
-        guard await recordFirstOpenIfNeeded() else { return stillWaiting() }
+        await recordFirstOpenIfNeeded()
         while let first = waiting.first {
             switch first {
             case .consent(let analytics, let marketing):
                 guard await gate.setConsent(analytics: analytics, marketing: marketing) else { return stillWaiting() }
-            case .conversion(var event):
-                guard let key = InstallId.get(in: directory) else { return stillWaiting() }
-                event.anonUserKey = key
+                values.consentAnswered(granted: analytics)
+            case .conversion(let event):
                 await gate.record(event)
             }
             waiting.removeFirst()
@@ -251,16 +259,14 @@ actor TraceClient {
                 + "or minted and \(waiting.count) call(s) wait for the next one")
     }
 
-    // Once, ever. The flag is written after the gate has taken the event, not before: the gate has sent it or
-    // written it to disk, so it is the gate's to deliver, and a flag written first would suppress an install the
-    // gate never received. A process killed in between records the install twice, which over counts one install
-    // and is the better of the two failures.
-    private func recordFirstOpenIfNeeded() async -> Bool {
-        guard !Storage.flagIsSet(Self.firstOpenFlag, in: directory) else { return true }
-        guard let key = InstallId.get(in: directory) else { return false }
-        await gate.record(Event(type: .firstOpen, anonUserKey: key, consentStatus: .unknown, appVersion: Self.appVersion))
-        Storage.setFlag(Self.firstOpenFlag, in: directory, log: log)
-        return true
+    // Once a launch, and once ever: the gate writes the flag when it sends the first open after a grant. A launch
+    // that ends before an answer writes no flag, so the next launch records a first open again. Only the flag's
+    // existence is read, which works before the first unlock after a reboot, and no key is needed: the gate stamps
+    // it on when it sends.
+    private func recordFirstOpenIfNeeded() async {
+        guard !firstOpenRecorded, !Storage.flagIsSet(Self.firstOpenFlag, in: directory) else { return }
+        firstOpenRecorded = true
+        await gate.record(Event(type: .firstOpen, anonUserKey: "", consentStatus: .unknown, appVersion: Self.appVersion))
     }
 
     // Reported, not changed: what the server keeps is the server's decision.

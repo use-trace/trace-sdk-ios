@@ -13,10 +13,15 @@ import Foundation
 /// `analytics` is the answer that gates events. `marketing` is passed on to the server for the record and never
 /// decides whether an event is sent, so marketing alone discards the queue like any other refusal.
 ///
-/// **The queue is on disk, not in memory**, so an app killed with its banner on screen does not lose its first
-/// open. It is one file beside the install id, excluded from backup for the same reason: it carries that id, and a
-/// queue restored onto a later install would send events for a visitor who no longer exists. At most 100 events
-/// are held; past that the oldest goes, because the newest conversions are the ones still worth sending.
+/// **Nothing is written to the device before consent.** Decided 6 October 2026, before the first release. The held
+/// events live in memory only, the install id is minted and written by the grant, and the first open flag is written
+/// when the first open is sent. A refusal writes nothing. The cost is accepted: an app killed with its banner still
+/// on screen loses what was held, and its next launch, finding no first open flag, records a first open again. At
+/// most 100 events are held; past that the oldest goes, because the newest conversions are the ones still worth
+/// sending.
+///
+/// Events are recorded with no key, because before a grant there is none, and the gate stamps the install id on
+/// each one as it sends it.
 ///
 /// The consent state is not persisted. A new process starts at `unknown` and holds until the host app says what
 /// the person answered, which an app has to do on every launch anyway, because the answer is the app's to keep.
@@ -26,21 +31,23 @@ import Foundation
 /// finishing and ahead of the held events. Each call waits for the one before it to finish.
 actor ConsentGate {
 
-    static let fileName = "held_events"
     static let maxHeld = 100
 
     /// `unknown` until ``setConsent(analytics:marketing:)`` is called.
     private(set) var state: ConsentState = .unknown
 
+    /// The install id, read or minted by the grant. Set whenever ``state`` is `granted`.
+    private var key = ""
+    /// What is held while the state is `unknown`, oldest first. In memory only, never on disk.
+    private var held: [Event] = []
+
     private let directory: URL
-    private let queueFile: URL
     private let sender: any EventSender
     private let log: TraceLog
     private var latest: Task<Void, Never>?
 
     init(directory: URL = Storage.defaultDirectory, sender: any EventSender, log: TraceLog = .silent) {
         self.directory = directory
-        queueFile = directory.appending(path: Self.fileName)
         self.sender = sender
         self.log = log
     }
@@ -53,22 +60,22 @@ actor ConsentGate {
 
     /// Records the answer, tells the server, then flushes or discards everything held.
     ///
-    /// The consent call first, then the held events oldest first, each stamped `GRANTED`: the server treats an
-    /// event's `consent_status` as authoritative, so one flushed by a grant that still said `UNKNOWN` would be
-    /// quarantined after the person had agreed.
+    /// A grant mints and writes the install id if there is none yet, then sends the consent call, then the held
+    /// events oldest first, each stamped with the id and `GRANTED`: the server treats an event's `consent_status` as
+    /// authoritative, so one flushed by a grant that still said `UNKNOWN` would be quarantined after the person had
+    /// agreed.
     ///
     /// A refusal still sends the consent call, because that is what withdraws an earlier grant, but only when this
     /// install already has an id. It reads the id with `peek`, never `get`: minting one to report a refusal would
     /// create the identifier the person has just declined.
     ///
-    /// The queue file is gone from disk when this returns, flushed or discarded. A send the server did not take is
-    /// not kept: the transport has tried three times, and a file that outlives the answer is one some later launch
-    /// sends again.
+    /// Nothing is held when this returns, flushed or discarded, and a refusal writes nothing. A send the server did
+    /// not take is not kept: the transport has tried three times.
     ///
     /// **Returns false, having changed nothing, when the install id exists and cannot be read**, which on iOS is the
     /// phone before its first unlock after a reboot. A grant then would flush the held events without the consent
-    /// call that must go before them, and a refusal could not withdraw under the id it cannot read. So the state, the
-    /// queue and the server are left as they were, and the caller asks again later.
+    /// call that must go before them, and a refusal could not withdraw under the id it cannot read. So the state, what
+    /// is held and the server are left as they were, and the caller asks again later.
     @discardableResult
     func setConsent(analytics: Bool, marketing: Bool) async -> Bool {
         await inOrder { await self.setConsentNow(analytics: analytics, marketing: marketing) }
@@ -89,9 +96,7 @@ actor ConsentGate {
         case .unknown:
             hold(event)
         case .granted:
-            var granted = event
-            granted.consentStatus = .granted
-            _ = await sender.send(granted)
+            await send(event)
         case .denied:
             // Nothing is kept for a later change of mind. A person who refuses and then agrees is tracked from the
             // moment they agreed, which is the whole of what consent means.
@@ -116,7 +121,9 @@ actor ConsentGate {
             key = InstallId.peek(in: directory)
         }
         state = analytics ? .granted : .denied
-        let held = readHeld()
+        self.key = key ?? ""
+        let flushing = held
+        held = []
 
         if let key {
             _ = await sender.sendConsent(key: key, analytics: analytics, marketing: marketing)
@@ -125,56 +132,34 @@ actor ConsentGate {
         }
 
         if analytics {
-            log.log("consent granted, sending \(held.count) held event(s)")
-            for event in held {
-                var granted = event
-                granted.consentStatus = .granted
-                _ = await sender.send(granted)
-            }
+            log.log("consent granted, sending \(flushing.count) held event(s)")
+            for event in flushing { await send(event) }
         } else {
-            log.log("consent refused, discarding \(held.count) held event(s)")
+            log.log("consent refused, discarding \(flushing.count) held event(s)")
         }
-        clearHeld()
         return true
     }
 
+    // Stamped with the key and GRANTED here, because neither was known when the event was recorded. The first open
+    // flag is written after the first open has gone to the transport, whether or not the server took it, because
+    // there is no retry across launches; a flag written first would suppress an install that was never sent.
+    private func send(_ event: Event) async {
+        var granted = event
+        granted.anonUserKey = key
+        granted.consentStatus = .granted
+        _ = await sender.send(granted)
+        if event.type == .firstOpen {
+            Storage.setFlag(TraceClient.firstOpenFlag, in: directory, log: log)
+        }
+    }
+
     private func hold(_ event: Event) {
-        var held = readHeld()
         held.append(event)
         if held.count > Self.maxHeld {
             let dropped = held.count - Self.maxHeld
             held.removeFirst(dropped)
             log.log("the held queue is full at \(Self.maxHeld), dropped the \(dropped) oldest held event(s)")
         }
-        write(held)
-        log.log("\(event.type.rawValue) held until the consent state is known, \(held.count) now held")
-    }
-
-    // One event per line, in the form it will be sent. The whole file is rewritten, which at a hundred lines is
-    // cheap, and a write is atomic, so a process killed mid write leaves the previous queue rather than half of one.
-    private func write(_ held: [Event]) {
-        let lines = held.compactMap { $0.json() }
-        do {
-            try Storage.write(Data(lines.joined(separator: Data("\n".utf8))), to: queueFile)
-        } catch {
-            log.log("could not write the held queue, \(held.count) event(s) may be lost")
-        }
-    }
-
-    // A line that is not an event, from an older crash or a newer SDK, is dropped rather than failing the queue.
-    private func readHeld() -> [Event] {
-        guard let data = try? Data(contentsOf: queueFile) else { return [] }
-        return data.split(separator: UInt8(ascii: "\n")).compactMap { Event(json: Data($0)) }
-    }
-
-    // Gone, not emptied. If it cannot be deleted it is emptied, so at least nothing in it is sent again.
-    private func clearHeld() {
-        guard FileManager.default.fileExists(atPath: queueFile.path) else { return }
-        do {
-            try FileManager.default.removeItem(at: queueFile)
-        } catch {
-            log.log("could not delete the held queue, emptying it instead")
-            try? Storage.write(Data(), to: queueFile)
-        }
+        log.log("\(event.type.rawValue) held in memory until the consent state is known, \(held.count) now held")
     }
 }

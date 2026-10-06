@@ -28,6 +28,12 @@ this SDK must obey, and it is kept current. What follows is the subset that bind
 - **The install id lives in a file in Application Support, excluded from backup. Never the Keychain**: Keychain items
   survive the app being deleted on iOS, so an id there would outlive an uninstall.
 - A visitor identity never appears in a log line.
+- **Nothing is written to the device before consent** (decided 6 October 2026, before the first release). Before an
+  answer the first open and every conversion are held in memory only and no install id exists. A grant writes
+  `install_id`, `first_open_sent` once the first open has been sent, and the conversion value flags. A refusal writes
+  nothing. The consent answer is not stored at all: the host app keeps it and passes it on every launch. A process
+  killed before an answer loses what was held, and the next launch records a first open again; that cost was
+  accepted. Registering with Apple does not wait, but its flags do, so a launch without a grant registers again.
 
 ## Lessons from the Android SDK, already paid for
 
