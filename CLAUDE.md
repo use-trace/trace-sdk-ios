@@ -42,3 +42,7 @@ this SDK must obey, and it is kept current. What follows is the subset that bind
 
 Needs full Xcode with its licence accepted. The core tests run with `swift test`; the iOS build runs with
 `xcodebuild` against the simulator.
+
+CI also checks the rules above (`scripts/check-privacy.sh`) and the public API (`scripts/check-api.sh`, against
+`api/TraceSDK.swiftinterface`). After a deliberate change to anything public, run `scripts/check-api.sh --update`
+and commit the file with the change.

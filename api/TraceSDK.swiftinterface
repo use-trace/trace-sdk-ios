@@ -1,0 +1,31 @@
+public enum CoarseValue : Swift.String, Swift.Sendable {
+  case low
+  case medium
+  case high
+  public init?(rawValue: Swift.String)
+  public typealias RawValue = Swift.String
+  public var rawValue: Swift.String {
+    get
+  }
+}
+public enum Trace {
+  public static func initialise(_ config: TraceSDK.TraceConfig)
+  public static func setConsent(analytics: Swift.Bool, marketing: Swift.Bool)
+  public static func conversion(_ name: Swift.String, value: Swift.Double?, metadata: [Swift.String : Swift.String])
+  public static func setConversionValue(fine: Swift.Int, coarse: TraceSDK.CoarseValue)
+  public static var installId: Swift.String? {
+    get
+  }
+}
+public struct TraceConfig : Swift.Sendable, Swift.CustomStringConvertible {
+  public var apiKey: Swift.String
+  public var apiURL: Swift.String
+  public var debugLogging: Swift.Bool
+  public init(apiKey: Swift.String, apiURL: Swift.String = "https://app.usetrace.io", debugLogging: Swift.Bool = false)
+  public var description: Swift.String {
+    get
+  }
+}
+extension TraceSDK.CoarseValue : Swift.Equatable {}
+extension TraceSDK.CoarseValue : Swift.Hashable {}
+extension TraceSDK.CoarseValue : Swift.RawRepresentable {}
