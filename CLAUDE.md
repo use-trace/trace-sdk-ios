@@ -11,7 +11,8 @@ this SDK must obey, and it is kept current. What follows is the subset that bind
 - British English in comments, documentation and commit messages. No em dashes or en dashes anywhere.
 - Direct, plain copy. No marketing language.
 - A bug fix ships with a failing test first.
-- Never push to `main`. Branch, commit, open a pull request.
+- Never push to `main`. Branch, commit, open a pull request. A green pull request merges itself
+  (`.github/workflows/auto-merge.yml`); the `hold` label keeps it back.
 
 ## What iOS can and cannot do
 

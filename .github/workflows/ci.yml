@@ -6,25 +6,28 @@ on:
     branches: [main]
 
 jobs:
-  copy-rules:
-    name: copy rules
-    runs-on: macos-15
+  # House rules shared by every Trace repository (docs/plans/REPO_AUTOMATION.md in use-trace/trace).
+  house:
+    name: house
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: No em dashes or en dashes
         run: |
-          git ls-files -z | python3 -c '
-          import sys
-          bad = []
-          for path in sys.stdin.buffer.read().split(b"\0"):
-              if not path:
-                  continue
-              for n, line in enumerate(open(path, "rb").read().decode("utf-8", "replace").splitlines(), 1):
-                  if chr(0x2013) in line or chr(0x2014) in line:
-                      bad.append(f"{path.decode()}:{n}")
-          print("\n".join(bad))
-          sys.exit(1 if bad else 0)
-          '
+          # Byte patterns, so the check reads the same whatever the runner's locale. -I skips binary files.
+          if git grep -nIF -e $'\xe2\x80\x93' -e $'\xe2\x80\x94' -- .; then
+            echo "Found an em dash or en dash. Use commas, colons or full stops." >&2
+            exit 1
+          fi
+          echo "Clean."
+      - name: Runners are pinned
+        run: |
+          # A moving label such as ubuntu-latest changes the machine under every job on GitHub's schedule, not ours.
+          if grep -nE '^[[:space:]]*runs-on:.*-latest' .github/workflows/*.yml; then
+            echo "Pin the runner (ubuntu-24.04 or macos-15)." >&2
+            exit 1
+          fi
+          echo "Pinned."
 
   test:
     name: test
