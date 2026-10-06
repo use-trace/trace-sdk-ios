@@ -166,15 +166,15 @@ its `Info.plist`. Add both keys:
 ```xml
 <key>NSAdvertisingAttributionReportEndpoint</key>
 <string>https://TRACE-POSTBACK-DOMAIN-NOT-YET-CHOSEN.example</string>
-<key>AdAttributionKit</key>
-<dict>
-    <key>AttributionCopyEndpoint</key>
-    <string>https://TRACE-POSTBACK-DOMAIN-NOT-YET-CHOSEN.example</string>
-</dict>
+<key>AttributionCopyEndpoint</key>
+<string>https://TRACE-POSTBACK-DOMAIN-NOT-YET-CHOSEN.example</string>
 ```
 
 `NSAdvertisingAttributionReportEndpoint` is where SKAdNetwork sends its postback copies, and
-`AttributionCopyEndpoint`, inside the `AdAttributionKit` dictionary, is where AdAttributionKit sends its copies.
+`AttributionCopyEndpoint` is where AdAttributionKit sends its copies. **Both are top level keys.** Xcode lists the
+second as "AdAttributionKit - Postback Copy URL", but the "AdAttributionKit" there is only a label: there is no
+`AdAttributionKit` dictionary, and a key nested inside one is ignored, so no postback copy would arrive and nothing
+would say so.
 
 **The domain above is a placeholder. Trace's postback domain has not been chosen yet**, and this README will name it
 when it has. Apple uses only the registrable domain and ignores any subdomain, so it will be a domain of its own.
