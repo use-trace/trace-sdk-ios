@@ -28,12 +28,16 @@ this SDK must obey, and it is kept current. What follows is the subset that bind
 - **The install id lives in a file in Application Support, excluded from backup. Never the Keychain**: Keychain items
   survive the app being deleted on iOS, so an id there would outlive an uninstall.
 - A visitor identity never appears in a log line.
-- **Nothing is written to the device before consent** (decided 6 October 2026, before the first release). Before an
-  answer the first open and every conversion are held in memory only and no install id exists. A grant writes
-  `install_id`, `first_open_sent` once the first open has been sent, and the conversion value flags. A refusal writes
-  nothing. The consent answer is not stored at all: the host app keeps it and passes it on every launch. A process
-  killed before an answer loses what was held, and the next launch records a first open again; that cost was
-  accepted. Registering with Apple does not wait, but its flags do, so a launch without a grant registers again.
+- **No identifier is written to the device before consent** (decided 6 October 2026, before the first release).
+  Before an answer the first open and every conversion are held in memory only and no install id exists. A grant
+  writes `install_id`, and `first_open_sent` once the first open has been sent. A refusal writes no identifier. The
+  consent answer is not stored at all: the host app keeps it and passes it on every launch. A process killed before
+  an answer loses what was held, and the next launch records a first open again; that cost was accepted.
+- **The two Apple flags are the exception, stored before consent** (decided 6 October 2026). Registering with Apple
+  happens at first launch whatever the consent state, because Apple's postbacks carry no device or user identifier
+  and only arrive if the app registered. `install_registered` and `conversion_value_raised` are empty files that hold
+  no identifier, written as soon as Apple takes the update, so a later launch does not register again and reset the
+  value to its lowest, which could undo a value the host app set.
 
 ## Lessons from the Android SDK, already paid for
 
