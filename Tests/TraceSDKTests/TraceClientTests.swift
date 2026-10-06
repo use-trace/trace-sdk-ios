@@ -54,8 +54,8 @@ struct TraceClientTests {
         await client.idle()
 
         #expect(sender.calls.isEmpty, "nothing may be sent while the install id cannot be read")
-        #expect(try written() == [InstallId.fileName],
-                "no new id, no first open flag, no held queue and no conversion value flag may be written")
+        #expect(try written() == [ConversionValues.registeredFlag, ConversionValues.raisedFlag, InstallId.fileName].sorted(),
+                "no new id, no first open flag and no held queue may be written; the Apple flags do not wait")
 
         // The phone is unlocked. The next call runs what waited, in the order it was called, under the first id.
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
@@ -125,26 +125,43 @@ struct TraceClientTests {
         #expect(registrar.updates == ["0 low"])
     }
 
-    // Decided 6 October 2026, before the first release: nothing is stored before consent. The first open waits in
-    // memory only; the id and the install are written the moment the person accepts, and a refusal never writes an
-    // identifier. These are that decision as tests, over the directory the SDK writes to.
+    // Decided 6 October 2026, before the first release: no identifier is stored before consent. The first open waits
+    // in memory only; the id and the install are written the moment the person accepts, and a refusal never writes
+    // an identifier. The one exception is the two Apple flags, decided the same day: they hold no identifier, and
+    // without them every launch would register with Apple again and reset the conversion value to its lowest. These
+    // are those decisions as tests, over the directory the SDK writes to.
 
     /// Every file the SDK has written to its directory.
     private func written() throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
     }
 
-    @Test func aFreshInstallThatNeverAnswersWritesNoFileAtAll() async throws {
+    /// The two files allowed before an answer: empty, and the record of what the SDK has told Apple.
+    private let appleFlags = [ConversionValues.registeredFlag, ConversionValues.raisedFlag].sorted()
+
+    @Test func aFreshInstallThatNeverAnswersWritesTheTwoAppleFlagsAndNothingElse() async throws {
         let sender = RecordingSender()
         let registrar = FakeRegistrar()
 
         await launch(sender, registrar) { $0.conversion("purchase", value: 9.99, metadata: [:]) }
 
-        #expect(try written().isEmpty, "nothing may be written to the device before the person has answered")
+        #expect(try written() == appleFlags,
+                "before an answer only the Apple flags may be written: no install id, no first open flag, no queue")
         #expect(sender.calls.isEmpty)
         #expect(InstallId.peek(in: directory) == nil)
-        // Apple is still told, because that needs no Trace consent; only the record of having told it waits.
         #expect(registrar.updates == ["0 low", "0 medium"])
+    }
+
+    // The flags are on disk so this cannot happen: a second launch registering again would reset the value to fine 0,
+    // coarse low, undoing the conversion's medium or a value the host app set for its own schema.
+    @Test func aSecondLaunchWithoutAnAnswerDoesNotRegisterWithAppleAgain() async throws {
+        await launch(RecordingSender()) { $0.setConversionValue(fine: 42, coarse: .high) }
+
+        let registrar = FakeRegistrar()
+        await launch(RecordingSender(), registrar) { $0.conversion("signup", value: nil, metadata: [:]) }
+
+        #expect(registrar.updates.isEmpty, "Apple's value must not be reset or lowered by a later launch")
+        #expect(try written() == appleFlags)
     }
 
     @Test func aRefusalWritesNoIdentifierAndSendsNothing() async throws {
@@ -155,7 +172,8 @@ struct TraceClientTests {
             $0.setConsent(analytics: false, marketing: true)
         }
 
-        #expect(try written().isEmpty, "a refusal may write nothing at all")
+        #expect(try written() == appleFlags, "a refusal may write no identifier, no first open flag and no queue")
+        #expect(InstallId.peek(in: directory) == nil)
         #expect(sender.calls.isEmpty)
     }
 
@@ -202,9 +220,10 @@ struct TraceClientTests {
     @Test func aRestartBeforeAnyAnswerIsAFirstOpenAgain() async throws {
         await launch(RecordingSender()) { $0.conversion("signup", value: nil, metadata: [:]) }
 
-        // The app is killed with its banner still on screen. Nothing was written, so the next launch knows nothing
-        // of this one: the held conversion is lost, which is the accepted cost, and the install is new.
-        #expect(try written().isEmpty)
+        // The app is killed with its banner still on screen. Only the Apple flags were written, so the next launch
+        // knows nothing of this one for Trace: the held conversion is lost, which is the accepted cost, and the
+        // install is new. Apple already has it.
+        #expect(try written() == appleFlags)
 
         let sender = RecordingSender()
         let registrar = FakeRegistrar()
@@ -212,7 +231,7 @@ struct TraceClientTests {
 
         #expect(sender.calls == ["consent analytics=true marketing=false", "event FIRST_OPEN"])
         #expect(sender.events.first?.anonUserKey == InstallId.peek(in: directory))
-        #expect(registrar.updates == ["0 low"], "no record of registering was kept, so it registers again")
+        #expect(registrar.updates.isEmpty, "the first launch registered and recorded it, so this one does not")
     }
 
     // The server keeps metadata keys of letters, digits and underscores and drops the rest without a word.
