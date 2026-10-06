@@ -21,10 +21,12 @@ import os
 /// made, so a conversion can never overtake the consent call that has to go before it. A call before
 /// ``initialise(_:)`` does nothing and says so in the log.
 ///
-/// **Nothing is written to the device before consent.** Before the person has answered, the first open and every
-/// conversion are held in memory only, and no install id exists. A grant writes the install id, the first open flag
-/// once the first open has been sent, and the record of having registered with Apple. A refusal writes nothing. An
-/// app killed before an answer loses what was held, and its next launch records a first open again.
+/// **No identifier is written to the device before consent.** Before the person has answered, the first open and
+/// every conversion are held in memory only, and no install id exists. A grant writes the install id, and the first
+/// open flag once the first open has been sent. A refusal writes no identifier. The only files written before an
+/// answer are the two empty flags recording what the SDK has told Apple, which hold no identifier and stop a later
+/// launch from registering again. An app killed before an answer loses what was held, and its next launch records a
+/// first open again.
 ///
 /// **Before the first unlock after a reboot it waits.** An app launched in the background then, by a push or a
 /// background refresh, finds the install id's file and cannot read it, because iOS has not decrypted it yet. The SDK
@@ -246,7 +248,6 @@ actor TraceClient {
             switch first {
             case .consent(let analytics, let marketing):
                 guard await gate.setConsent(analytics: analytics, marketing: marketing) else { return stillWaiting() }
-                values.consentAnswered(granted: analytics)
             case .conversion(let event):
                 await gate.record(event)
             }

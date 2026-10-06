@@ -87,9 +87,9 @@ identity is removed where the line is written.
 
 ## Consent
 
-**Nothing is sent to Trace and nothing is stored until you call `setConsent`.** Until then every event, including the
-first open, is held in memory and sent to nobody, and no install id exists. An app that never calls it sends nothing
-and writes nothing to the device, which is correct and not a fault.
+**Nothing is sent to Trace and no identifier is stored until you call `setConsent`.** Until then every event,
+including the first open, is held in memory and sent to nobody, and no install id exists. An app that never calls it
+sends nothing to Trace and writes only the two Apple flags described below, which is correct and not a fault.
 
 Wire it to your own consent interface, on the answer:
 
@@ -115,17 +115,25 @@ consent record belongs to your app, which has to show it, change it and withdraw
 Registering the install with Apple does not wait for consent. It sends nothing to Trace and no identity anywhere:
 it tells Apple's own privacy preserving attribution system, on the device, that the app launched, and Apple then
 reports the campaign at campaign level, with no identifier for the person, on its own terms. The SDK's record that
-it has done so is a file, and like every file it is written only after a grant.
+it has done so is two empty files, written whatever the person answers; see the next section for why.
 
 ## What is stored on the device, and when
 
-Nothing before the person grants consent. Decided on 6 October 2026, before the first release.
+No identifier before the person grants consent. Decided on 6 October 2026, before the first release.
 
 | When | What the SDK writes, in `Application Support/io.usetrace.sdk`, excluded from backup |
 | --- | --- |
-| Before an answer | Nothing. The first open and any conversions are held in memory only. |
-| On a grant | `install_id`, the install id, if there is not one yet. `first_open_sent`, once the first open has been sent. `install_registered` and `conversion_value_raised`, empty files recording what the SDK has told Apple, as they become true. |
-| On a refusal | Nothing. |
+| Whatever the answer, and before one | `install_registered` and `conversion_value_raised`, empty files recording what the SDK has told Apple, as they become true. |
+| Before an answer | Nothing else. The first open and any conversions are held in memory only, and no install id exists. |
+| On a grant | `install_id`, the install id, if there is not one yet. `first_open_sent`, once the first open has been sent. |
+| On a refusal | Nothing else. No identifier is written. |
+
+**The two Apple flags are stored before consent, and they hold no identifier.** Each is an empty file: its existence
+is all it says, that the install was registered with Apple, or that the conversion value has been raised past that.
+They are stored so that a later launch does not register again. Registering sets the value to fine 0, coarse `low`,
+so doing it on every launch would undo the `medium` a conversion set, and any value your app set with
+`setConversionValue`. Apple's postbacks carry no device or user identifier, and they only arrive if the app
+registered, so registering happens at first launch whatever the person answers.
 
 The SDK does not store the consent answer. Your app does, and passes it to `setConsent` on every launch.
 
@@ -204,14 +212,9 @@ Until it is set, the SDK still registers the install with Apple, but no postback
   neither this SDK nor Trace can join an iOS install to the person or the web journey that led to it.
 - **A reinstall counts as a new install.** The id does not survive the app being deleted, by design, so a
   reinstall mints a fresh one.
-- **An app ended before the person answers loses what was held.** Nothing is stored before consent, so the held
-  first open and conversions are in memory only. The next launch finds no first open flag and records a first open
+- **An app ended before the person answers loses what was held.** The held first open and conversions are not
+  stored before consent, only kept in memory. The next launch finds no first open flag and records a first open
   again, with that launch's time, so the install is still reported once the person agrees.
-- **Without a grant, the install is registered with Apple again on every launch.** The record that it was
-  registered is a file, and no file is written before consent. So for a person who has not agreed, or who refused,
-  each launch sets the conversion value back to fine 0, coarse `low`, and the first conversion of the launch raises
-  it to `medium` again. That includes a value your app set with `setConversionValue` on an earlier launch: set it
-  again on each launch if you use your own schema.
 - **Offline at the moment consent is granted loses what was held.** The SDK tries each send three times and then
   gives up, and nothing a grant flushed is kept, including the first open. A queue that outlived the answer would be
   sent again by some later launch, and a duplicated install is harder to see than a missing one.
