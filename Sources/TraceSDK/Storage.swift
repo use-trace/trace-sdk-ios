@@ -23,4 +23,20 @@ enum Storage {
         var file = file
         try file.setResourceValues(values)
     }
+
+    /// Whether the flag file exists. Only its existence is read, never its contents, and a file's existence can be
+    /// seen even before the phone's first unlock after a reboot, when its contents cannot.
+    static func flagIsSet(_ name: String, in directory: URL) -> Bool {
+        FileManager.default.fileExists(atPath: directory.appending(path: name).path)
+    }
+
+    /// Creates the flag file, empty and excluded from backup like everything else here. Never throws: a flag that
+    /// could not be written means the work it records is done again later, which each caller is built to survive.
+    static func setFlag(_ name: String, in directory: URL, log: TraceLog) {
+        do {
+            try write(Data(), to: directory.appending(path: name))
+        } catch {
+            log.log("could not record \(name), so it may be done again")
+        }
+    }
 }
