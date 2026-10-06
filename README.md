@@ -87,8 +87,9 @@ identity is removed where the line is written.
 
 ## Consent
 
-**Nothing is sent to Trace until you call `setConsent`.** Until then every event, including the first open, is held
-on disk and sent to nobody. An app that never calls it sends nothing, which is correct and not a fault.
+**Nothing is sent to Trace and nothing is stored until you call `setConsent`.** Until then every event, including the
+first open, is held in memory and sent to nobody, and no install id exists. An app that never calls it sends nothing
+and writes nothing to the device, which is correct and not a fault.
 
 Wire it to your own consent interface, on the answer:
 
@@ -103,16 +104,30 @@ func consentBannerAnswered(analytics: Bool, marketing: Bool) {
 - `marketing` goes to Trace for the consent record and decides nothing here, so `analytics: false` discards what was
   held whatever `marketing` says.
 
-A grant sends the consent record, then everything held, oldest first. A refusal sends the consent record, which
-withdraws an earlier grant, and throws away everything held. Someone who refuses and later agrees is tracked from
-the moment they agreed.
+A grant writes the install id, sends the consent record, then everything held, oldest first. A refusal throws away
+everything held and writes nothing. If an earlier grant left an install id, a refusal also sends the consent record,
+which withdraws that grant; with no install id there is nothing to withdraw and nothing is sent. Someone who refuses
+and later agrees is tracked from the moment they agreed.
 
 **Call `setConsent` on every launch, from the answer your app stored.** The SDK does not keep the answer: the
 consent record belongs to your app, which has to show it, change it and withdraw it.
 
 Registering the install with Apple does not wait for consent. It sends nothing to Trace and no identity anywhere:
 it tells Apple's own privacy preserving attribution system, on the device, that the app launched, and Apple then
-reports the campaign at campaign level, with no identifier for the person, on its own terms.
+reports the campaign at campaign level, with no identifier for the person, on its own terms. The SDK's record that
+it has done so is a file, and like every file it is written only after a grant.
+
+## What is stored on the device, and when
+
+Nothing before the person grants consent. Decided on 6 October 2026, before the first release.
+
+| When | What the SDK writes, in `Application Support/io.usetrace.sdk`, excluded from backup |
+| --- | --- |
+| Before an answer | Nothing. The first open and any conversions are held in memory only. |
+| On a grant | `install_id`, the install id, if there is not one yet. `first_open_sent`, once the first open has been sent. `install_registered` and `conversion_value_raised`, empty files recording what the SDK has told Apple, as they become true. |
+| On a refusal | Nothing. |
+
+The SDK does not store the consent answer. Your app does, and passes it to `setConsent` on every launch.
 
 ## Sending a conversion
 
@@ -152,7 +167,7 @@ Text(Trace.installId ?? "No identifier yet")
 
 A person asking what Trace holds about them, or asking for it to be deleted, needs their identifier first, and an
 app has no browser settings to look in. So show it on your privacy screen. It is nil before `initialise`, nil
-until something has been recorded, and nil before the phone's first unlock after a reboot. Reading it creates
+until the person has granted consent, and nil before the phone's first unlock after a reboot. Reading it creates
 nothing and sends nothing. Show it to the person it belongs to; do not log it or send it anywhere else.
 
 The id lives in one file in your app's Application Support directory, excluded from backup, never in the Keychain:
@@ -189,9 +204,17 @@ Until it is set, the SDK still registers the install with Apple, but no postback
   neither this SDK nor Trace can join an iOS install to the person or the web journey that led to it.
 - **A reinstall counts as a new install.** The id does not survive the app being deleted, by design, so a
   reinstall mints a fresh one.
+- **An app ended before the person answers loses what was held.** Nothing is stored before consent, so the held
+  first open and conversions are in memory only. The next launch finds no first open flag and records a first open
+  again, with that launch's time, so the install is still reported once the person agrees.
+- **Without a grant, the install is registered with Apple again on every launch.** The record that it was
+  registered is a file, and no file is written before consent. So for a person who has not agreed, or who refused,
+  each launch sets the conversion value back to fine 0, coarse `low`, and the first conversion of the launch raises
+  it to `medium` again. That includes a value your app set with `setConversionValue` on an earlier launch: set it
+  again on each launch if you use your own schema.
 - **Offline at the moment consent is granted loses what was held.** The SDK tries each send three times and then
-  gives up, and what a grant flushed is gone from disk by then, including the first open. A queue that outlived the
-  answer would be sent again by some later launch, and a duplicated install is harder to see than a missing one.
+  gives up, and nothing a grant flushed is kept, including the first open. A queue that outlived the answer would be
+  sent again by some later launch, and a duplicated install is harder to see than a missing one.
 - **The conversion value schema is basic.** The install is registered and the first conversion raises the coarse
   value to `medium`, nothing more. Mapping your own events onto Apple's six bit fine value is its own piece of work;
   until then use `setConversionValue` for your own schema.
