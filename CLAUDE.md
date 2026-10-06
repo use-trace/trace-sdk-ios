@@ -58,11 +58,12 @@ CI also checks the rules above (`scripts/check-privacy.sh`) and the public API (
 and commit the file with the change.
 
 `.github/workflows/newest-xcode.yml` runs the tests every Monday on `macos-latest` with the newest released Xcode
-there, and on the newest Xcode beta (allowed to fail, reported in the run's summary). It is the one workflow allowed a
-`-latest` runner: the house job in `ci.yml` exempts that file by name, and nothing else. A failure of the newest
-Xcode run opens one `incident` issue titled "Newest Xcode run is failing" and alerts, through the monorepo's shared
-recorder; the next pass closes it. The beta job names its image by hand (`xcode-27` in October 2026); move it to the
-next image when GitHub announces one.
+there, and on the newest Xcode beta (allowed to fail, reported in the run's summary). It is the one workflow allowed
+a `-latest` runner: the house job in `ci.yml` exempts that file by name, and nothing else. A failure of the newest
+Xcode run opens one `incident` issue titled "Newest Xcode run is failing" and alerts, through a copy of the
+monorepo's shared recorder (a public repository cannot call a workflow in a private one); the next pass closes it.
+The beta job names its image by hand (`xcode-27` in October 2026); move it to the next image when GitHub announces
+one.
 
 **The privacy manifest is a statement every customer's app makes to Apple.** `Sources/TraceSDK/PrivacyInfo.xcprivacy`
 and the README's "What to declare to the stores" say what leaves the device. Sending a new field, or using a required
