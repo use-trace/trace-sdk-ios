@@ -57,6 +57,13 @@ CI also checks the rules above (`scripts/check-privacy.sh`) and the public API (
 `api/TraceSDK.swiftinterface`). After a deliberate change to anything public, run `scripts/check-api.sh --update`
 and commit the file with the change.
 
+`.github/workflows/newest-xcode.yml` runs the tests every Monday on `macos-latest` with the newest released Xcode
+there, and on the newest Xcode beta (allowed to fail, reported in the run's summary). It is the one workflow allowed a
+`-latest` runner: the house job in `ci.yml` exempts that file by name, and nothing else. A failure of the newest
+Xcode run opens one `incident` issue titled "Newest Xcode run is failing" and alerts, through the monorepo's shared
+recorder; the next pass closes it. The beta job names its image by hand (`xcode-27` in October 2026); move it to the
+next image when GitHub announces one.
+
 **The privacy manifest is a statement every customer's app makes to Apple.** `Sources/TraceSDK/PrivacyInfo.xcprivacy`
 and the README's "What to declare to the stores" say what leaves the device. Sending a new field, or using a required
 reason API, changes both, in the same pull request. `scripts/check-privacy-manifest.py` (in the `privacy` job) fails

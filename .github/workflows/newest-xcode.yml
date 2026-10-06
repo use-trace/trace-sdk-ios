@@ -1,0 +1,96 @@
+name: newest xcode
+
+# Every week, the tests on the newest Xcode, not the one CI pins (docs/plans/REPO_AUTOMATION.md in use-trace/trace,
+# iOS task 6). CI runs on macos-15 and its default Xcode; customers move to a new Xcode sooner than that image does.
+# - newest: macos-latest with the newest released Xcode it carries. This file is the one place a -latest runner is
+#   allowed: the house job in ci.yml exempts it by name, because following the newest image is its whole point.
+# - beta: the newest Xcode beta, on the image that carries it. Allowed to fail and reported in the run's summary, so a
+#   coming break is seen before release day without paging anyone.
+# A failure of newest opens one incident issue and alerts through the monorepo's shared recorder; a later pass
+# closes it.
+
+on:
+  schedule:
+    - cron: '41 3 * * 1'
+  workflow_dispatch:
+  # Temporary, to prove the workflow on its pull request. Removed before merge.
+  pull_request:
+    paths: [.github/workflows/newest-xcode.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  newest:
+    name: newest xcode
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: The newest released Xcode on the image
+        run: |
+          # LicenseInfo says GM or Beta; the app's name does not always (a release can sit at Xcode_x_beta.app).
+          app=$(for a in /Applications/Xcode_*.app; do
+            [ -L "$a" ] && continue
+            [ "$(/usr/libexec/PlistBuddy -c 'Print :licenseType' "$a/Contents/Resources/LicenseInfo.plist" 2> /dev/null)" = GM ] || continue
+            echo "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$a/Contents/version.plist") $a"
+          done | sort -V | tail -1 | cut -d' ' -f2-)
+          [ -n "$app" ] || { echo "No released Xcode found on this image." >&2; exit 1; }
+          sudo xcode-select -s "$app"
+          { sw_vers -productVersion; xcodebuild -version; } | tee -a "$GITHUB_STEP_SUMMARY"
+      - run: swift test
+      - name: Run the tests on an iPhone simulator
+        run: |
+          udid=$(xcrun simctl list devices available | grep iPhone | grep -m1 -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
+          xcodebuild test -scheme TraceSDK -destination "platform=iOS Simulator,id=$udid"
+
+  beta:
+    name: xcode beta
+    # The image carrying betas is named by hand (the xcode-27 preview in October 2026). When GitHub announces
+    # the next one (macos-27 at general availability, then xcode-28), change this label.
+    runs-on: xcode-27
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - id: xcode
+        name: The newest Xcode beta on the image
+        run: |
+          app=$(for a in /Applications/Xcode_*.app; do
+            [ -L "$a" ] && continue
+            [ "$(/usr/libexec/PlistBuddy -c 'Print :licenseType' "$a/Contents/Resources/LicenseInfo.plist" 2> /dev/null)" = Beta ] || continue
+            echo "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$a/Contents/version.plist") $a"
+          done | sort -V | tail -1 | cut -d' ' -f2-)
+          if [ -z "$app" ]; then
+            echo "No Xcode beta on this image this week." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          sudo xcode-select -s "$app"
+          { sw_vers -productVersion; xcodebuild -version; } | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+      - if: steps.xcode.outputs.found
+        run: swift test
+      - name: Run the tests on an iPhone simulator
+        if: steps.xcode.outputs.found
+        run: |
+          udid=$(xcrun simctl list devices available | grep iPhone | grep -m1 -oE '[0-9A-F]{8}-([0-9A-F]{4}-){3}[0-9A-F]{12}')
+          xcodebuild test -scheme TraceSDK -destination "platform=iOS Simulator,id=$udid"
+      - name: Report a beta break
+        if: failure()
+        run: |
+          msg="The tests fail on $(xcodebuild -version | head -1). Allowed to fail, but this is what the next Xcode will do."
+          echo "::warning::$msg"
+          echo "$msg" >> "$GITHUB_STEP_SUMMARY"
+
+  record:
+    needs: newest
+    if: ${{ !cancelled() }}
+    permissions:
+      issues: write
+      actions: write
+    uses: use-trace/trace/.github/workflows/incident-record.yml@main
+    with:
+      title: Test incident from the newest xcode workflow, ignore
+      outcome: ${{ needs.newest.result }}
+      body: The weekly newest Xcode run failed. It runs the tests on macos-latest with the newest released Xcode, so a customer on that Xcode may hit the same break.
+    secrets: inherit
