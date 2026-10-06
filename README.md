@@ -40,7 +40,7 @@ targets: [
 ]
 ```
 
-No version is tagged yet. Until `0.1.0` is, depend on the `main` branch.
+`0.1.0` is the first release, tagged on 6 October 2026.
 
 ## Initialising
 
