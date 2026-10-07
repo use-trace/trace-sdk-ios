@@ -77,6 +77,8 @@ struct Transport: EventSender {
             "consent_marketing": marketing,
             "anon_user_key": key,
             "timestamp": Event.now(),
+            // The share of people who said yes is worked out per platform (decision 3 of APP_MODELLED_INSTALLS.md).
+            "platform": "ios",
         ]
         guard let body = try? JSONSerialization.data(withJSONObject: fields) else { return false }
         let accepted = await post("/v1/consent", body)

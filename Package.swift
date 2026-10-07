@@ -12,6 +12,7 @@ let package = Package(
         // The privacy manifest is a resource so that it ships inside the package and reaches every app's privacy
         // report. Xcode does not treat an .xcprivacy file as a resource unless it is declared here.
         .target(name: "TraceSDK", resources: [.process("PrivacyInfo.xcprivacy")]),
-        .testTarget(name: "TraceSDKTests", dependencies: ["TraceSDK"]),
+        // The conversion value schema's test vectors, a copy of the file the server reads (see the file's own "about").
+        .testTarget(name: "TraceSDKTests", dependencies: ["TraceSDK"], resources: [.copy("conversion-value-vectors.json")]),
     ]
 )

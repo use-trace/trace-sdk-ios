@@ -95,6 +95,14 @@ struct TransportTests {
         }
     }
 
+    // Decided 7 October 2026 (decision 3 of APP_MODELLED_INSTALLS.md in use-trace/trace): the share of people who
+    // said yes is worked out per platform, so the consent call says which platform answered. Never an identifier.
+    @Test func theConsentCallSaysItIsFromAnIOSApp() async throws {
+        let server = StubServer()
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: false, marketing: false)
+        #expect(try #require(server.requests.first).json["platform"] as? String == "ios")
+    }
+
     // Row 3: the server takes the key for a replayed event from the consent call, so the consent call carries it.
     @Test func theInstallIdIsOnEveryEventAndOnTheConsentCall() async {
         let server = StubServer()
