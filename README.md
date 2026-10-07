@@ -33,14 +33,14 @@ In Xcode, File, Add Package Dependencies, and enter `https://github.com/use-trac
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/use-trace/trace-sdk-ios", from: "0.1.0"),
+    .package(url: "https://github.com/use-trace/trace-sdk-ios", from: "0.1.1"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [.product(name: "TraceSDK", package: "trace-sdk-ios")]),
 ]
 ```
 
-`0.1.0` is the first release, tagged on 6 October 2026.
+Use `0.1.1` or later. `0.1.0` (6 October 2026) sent events to the dashboard's address instead of the API's, where they were answered and lost; `0.1.1` (7 October 2026) sends them to `https://app.usetrace.io/api-proxy`.
 
 ## Initialising
 
