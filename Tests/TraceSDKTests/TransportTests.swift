@@ -18,12 +18,60 @@ struct TransportTests {
     }
 
     // The lessons table, row 1: /v1/event answers 202 and /v1/consent 201, so a 200 only check fails every send.
-    @Test(arguments: [200, 201, 202, 204])
-    func anyTwoHundredIsASuccess(status: Int) async {
+    @Test(arguments: [200, 201, 202])
+    func anyTwoHundredWithTheApisAnswerIsASuccess(status: Int) async {
         let server = StubServer { _, _ in .status(status) }
         #expect(await transport(server).send(firstOpen()))
         #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false))
         #expect(server.requests.count == 2, "a success must not be retried")
+    }
+
+    // 7 October 2026: the default address reached the dashboard, which answers a POST with a web page and a 200, and
+    // every event was counted as delivered and lost. A 2xx that is not the API's answer is a wrong address: not
+    // delivered, not retried, and said in the log.
+    @Test func aTwoHundredWebPageIsNotDeliveredIsNotRetriedAndIsLogged() async {
+        let server = StubServer { _, _ in .body(200, "<!DOCTYPE html><html><body>Trace</body></html>") }
+        #expect(await transport(server).send(firstOpen()) == false)
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
+        #expect(server.requests.count == 2, "a wrong address stays wrong, so it is not retried")
+        #expect(capture.lines.filter { $0.contains("check the configured api url") }.count == 2)
+    }
+
+    @Test(arguments: [
+        #"{"accepted":true}"#,
+        #"{"accepted":true,"buffered":true,"request_id":"req_placeholder"}"#,
+        #"{"accepted":true,"ignored":true,"reason":"ip_excluded"}"#,
+    ])
+    func aTwoHundredAndTwoWithAcceptedTrueIsDelivered(body: String) async {
+        let server = StubServer { _, _ in .body(202, body) }
+        #expect(await transport(server).send(firstOpen()))
+        #expect(server.requests.count == 1)
+    }
+
+    @Test(arguments: [
+        #"{"anon_user_key":null,"cookie_set":false,"journey_ref":null}"#,
+        #"{"anon_user_key":null,"cookie_set":false,"ignored":true,"reason":"ip_excluded"}"#,
+    ])
+    func aTwoHundredAndOneWithTheConsentAnswerIsDelivered(body: String) async {
+        let server = StubServer { _, _ in .body(201, body) }
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: false, marketing: false))
+        #expect(server.requests.count == 1)
+    }
+
+    // Each route is held to its own answer, so the event's answer does not pass for the consent call's.
+    @Test(arguments: ["", "{}", "[]", "null", #"{"ok":true}"#, #"{"accepted":false}"#, #"{"accepted":"true"}"#,
+                      #"{"cookie_set":true}"#])
+    func aTwoHundredWithOtherJSONIsNotDeliveredOnTheEventRoute(body: String) async {
+        let server = StubServer { _, _ in .body(202, body) }
+        #expect(await transport(server).send(firstOpen()) == false)
+        #expect(server.requests.count == 1)
+    }
+
+    @Test(arguments: ["", "{}", "[]", #"{"ok":true}"#, #"{"accepted":true}"#, #"{"cookie_set":"true"}"#])
+    func aTwoHundredWithOtherJSONIsNotDeliveredOnTheConsentRoute(body: String) async {
+        let server = StubServer { _, _ in .body(201, body) }
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
+        #expect(server.requests.count == 1)
     }
 
     // Row 2: a payload the server rejected it will reject again.
