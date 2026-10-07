@@ -35,8 +35,8 @@ struct TraceEndToEndTests {
         #expect(events.last?["value"] as? Double == 29.99)
         #expect(requests.allSatisfy { $0.header("x-trace-api-key") == "tk_placeholder" })
 
-        // Registered with Apple exactly once; the second update is the conversion raising the coarse value.
-        #expect(registrar.updates == ["0 low", "0 medium"])
+        // Registered with Apple exactly once; the second update is the purchase, 29.99 in band 32, coarse high.
+        #expect(registrar.updates == ["0 low", "32 high"])
     }
 
     @Test func callsBeforeInitialiseDoNothingAndDoNotThrow() async {

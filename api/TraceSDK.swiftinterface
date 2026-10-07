@@ -21,7 +21,7 @@ public struct TraceConfig : Swift.Sendable, Swift.CustomStringConvertible {
   public var apiKey: Swift.String
   public var apiURL: Swift.String
   public var debugLogging: Swift.Bool
-  public init(apiKey: Swift.String, apiURL: Swift.String = "https://app.usetrace.io", debugLogging: Swift.Bool = false)
+  public init(apiKey: Swift.String, apiURL: Swift.String = "https://app.usetrace.io/api-proxy", debugLogging: Swift.Bool = false)
   public var description: Swift.String {
     get
   }

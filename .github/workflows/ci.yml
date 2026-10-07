@@ -23,7 +23,8 @@ jobs:
       - name: Runners are pinned
         run: |
           # A moving label such as ubuntu-latest changes the machine under every job on GitHub's schedule, not ours.
-          if grep -nE '^[[:space:]]*runs-on:.*-latest' .github/workflows/*.yml; then
+          # The one exception is newest-xcode.yml, whose job is to follow the newest image on purpose.
+          if grep -nE '^[[:space:]]*runs-on:.*-latest' $(ls .github/workflows/*.yml | grep -vx .github/workflows/newest-xcode.yml); then
             echo "Pin the runner (ubuntu-24.04 or macos-15)." >&2
             exit 1
           fi
@@ -60,13 +61,15 @@ jobs:
           xcodebuild test -scheme TraceSDK -destination "platform=iOS Simulator,id=$udid"
 
   # The rules in CLAUDE.md under "Not negotiable", checked in code: no advertising identifier, no Keychain, no
-  # identify, logging only through TraceLog, no dependencies.
+  # identify, logging only through TraceLog, no dependencies. Then the privacy manifest: valid, declaring every
+  # required reason API the code uses, and inside the built package. macOS, because that needs the iOS SDK.
   privacy:
     name: privacy
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - run: scripts/check-privacy.sh
+      - run: scripts/check-privacy-manifest.py
 
   # The public interface compared with api/TraceSDK.swiftinterface, so any change to it is visible and reviewed.
   api:

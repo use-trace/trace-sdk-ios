@@ -11,6 +11,10 @@ public struct TraceConfig: Sendable, CustomStringConvertible {
 
     /// Where to send. The hosted API unless a self hosted deployment says otherwise. A trailing slash does no harm,
     /// and a url that is not http is reported in the log and then nothing is sent, rather than throwing.
+    ///
+    /// The hosted API is `/api-proxy` on the dashboard's host, as the tracking tag and the WordPress plugin use it.
+    /// The bare host is the dashboard, which answers a `POST /v1/event` with a web page and a 200, so every event sent
+    /// there looked delivered and was lost (`DefaultApiURLTests`).
     public var apiURL: String
 
     /// Whether the SDK writes what it is doing to the unified log, subsystem `io.usetrace.sdk`. Off by default. It
@@ -18,7 +22,7 @@ public struct TraceConfig: Sendable, CustomStringConvertible {
     /// written.
     public var debugLogging: Bool
 
-    public init(apiKey: String, apiURL: String = "https://app.usetrace.io", debugLogging: Bool = false) {
+    public init(apiKey: String, apiURL: String = "https://app.usetrace.io/api-proxy", debugLogging: Bool = false) {
         self.apiKey = apiKey
         self.apiURL = apiURL
         self.debugLogging = debugLogging

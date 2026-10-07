@@ -51,8 +51,19 @@ let placeholderKey = "auk_app_0123456789abcdef0123456789abcdef"
 
 /// What a stub server answers one request with.
 enum Reply: Sendable {
+    /// The status, with what the Trace API answers that route with when the status is a 2xx.
     case status(Int)
+    /// The status with this body instead: an address that is not the Trace API, or an answer it does not give.
+    case body(Int, String)
     case networkFailure
+}
+
+/// What the Trace API answers each route with when it has taken the request (`apps/api/src/tim/tim.controller.ts`
+/// and `apps/api/src/consent/consent.controller.ts` in the monorepo).
+func apiAnswer(to path: String) -> String {
+    path == "/v1/consent"
+        ? #"{"anon_user_key":"\#(placeholderKey)","cookie_set":true,"journey_ref":null}"#
+        : #"{"accepted":true}"#
 }
 
 /// One request as it arrived on the wire.
@@ -113,11 +124,17 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         case .networkFailure:
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
         case .status(let status):
-            let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data())
-            client?.urlProtocolDidFinishLoading(self)
+            reply(url, status, (200...299).contains(status) ? apiAnswer(to: url.path) : "")
+        case .body(let status, let body):
+            reply(url, status, body)
         }
+    }
+
+    private func reply(_ url: URL, _ status: Int, _ body: String) {
+        let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocolDidFinishLoading(self)
     }
 
     override func stopLoading() {}

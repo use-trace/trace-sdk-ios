@@ -21,10 +21,12 @@ import os
 /// made, so a conversion can never overtake the consent call that has to go before it. A call before
 /// ``initialise(_:)`` does nothing and says so in the log.
 ///
-/// **Nothing is written to the device before consent.** Before the person has answered, the first open and every
-/// conversion are held in memory only, and no install id exists. A grant writes the install id, the first open flag
-/// once the first open has been sent, and the record of having registered with Apple. A refusal writes nothing. An
-/// app killed before an answer loses what was held, and its next launch records a first open again.
+/// **No identifier is written to the device before consent.** Before the person has answered, the first open and
+/// every conversion are held in memory only, and no install id exists. A grant writes the install id, and the first
+/// open flag once the first open has been sent. A refusal writes no identifier. The only files written before an
+/// answer are the two recording what the SDK has told Apple, the registration flag and the conversion value record,
+/// which hold no identifier. An app killed before an answer loses what was held, and its next launch records a
+/// first open again.
 ///
 /// **Before the first unlock after a reboot it waits.** An app launched in the background then, by a push or a
 /// background refresh, finds the install id's file and cannot read it, because iOS has not decrypted it yet. The SDK
@@ -78,13 +80,15 @@ public enum Trace {
     /// `metadata` is anything else worth keeping with it. The server keeps keys of letters, digits and underscores,
     /// up to 50, and drops the rest, so the log says which it will drop. Put nothing identifying in it.
     ///
-    /// Held while consent is unknown, dropped if it was refused, sent otherwise. The first conversion also raises
-    /// Apple's coarse conversion value to `medium`, unless the app has set its own value.
+    /// Held while consent is unknown, dropped if it was refused, sent otherwise. Whatever the answer, it also sets
+    /// Apple's conversion value by Trace's schema (``ConversionValueSchema``), unless the app has set its own value.
     public static func conversion(_ name: String, value: Double?, metadata: [String: String]) {
         current("conversion")?.conversion(name, value: value, metadata: metadata)
     }
 
-    /// Sets Apple's conversion value, for an app with its own schema. From then on the SDK leaves the value alone.
+    /// Sets Apple's conversion value, for an app whose postbacks go to a measurement partner with its own schema. From
+    /// then on the SDK leaves the value alone, in every later launch too. Trace reads every postback it receives by
+    /// its own schema, so an app whose postbacks come to Trace should not call this.
     ///
     /// `fine` is 0 to 63; anything else is refused with a log line rather than passed to StoreKit to throw. It goes
     /// to SKAdNetwork on iOS 16.1 and later and to AdAttributionKit on iOS 17.4 and later.
@@ -189,7 +193,7 @@ actor TraceClient {
     /// Registers the install with Apple, then records the first open if it has never been recorded.
     nonisolated func launch() {
         enqueue {
-            await self.values.registerInstall()
+            await self.values.launched()
             await self.run(nil)
         }
     }
@@ -211,7 +215,7 @@ actor TraceClient {
                           consentStatus: .unknown, appVersion: Self.appVersion, eventName: name, value: value,
                           metadata: metadata.isEmpty ? nil : metadata)
         enqueue {
-            await self.values.conversionRecorded()
+            await self.values.conversionRecorded(value: value)
             await self.run(.conversion(event))
         }
     }
@@ -246,7 +250,6 @@ actor TraceClient {
             switch first {
             case .consent(let analytics, let marketing):
                 guard await gate.setConsent(analytics: analytics, marketing: marketing) else { return stillWaiting() }
-                values.consentAnswered(granted: analytics)
             case .conversion(let event):
                 await gate.record(event)
             }

@@ -70,7 +70,7 @@ actor ConsentGate {
     /// create the identifier the person has just declined.
     ///
     /// Nothing is held when this returns, flushed or discarded, and a refusal writes nothing. A send the server did
-    /// not take is not kept: the transport has tried three times.
+    /// not take is not kept: the transport has already retried what was worth retrying.
     ///
     /// **Returns false, having changed nothing, when the install id exists and cannot be read**, which on iOS is the
     /// phone before its first unlock after a reboot. A grant then would flush the held events without the consent
@@ -106,6 +106,10 @@ actor ConsentGate {
 
     private func setConsentNow(analytics: Bool, marketing: Bool) async -> Bool {
         let key: String?
+        // Read before the grant can mint an id: a grant is the install's first answer only if it mints the id and no
+        // answer has been reported before (a refusal, or a grant the server took).
+        let minting = InstallId.read(in: directory) == .absent
+        let reported = ConversionValues.answerReported(in: directory)
         if analytics {
             key = InstallId.get(in: directory)
             if key == nil {
@@ -126,9 +130,19 @@ actor ConsentGate {
         held = []
 
         if let key {
-            _ = await sender.sendConsent(key: key, analytics: analytics, marketing: marketing)
+            let first = analytics && minting && reported == false
+            if await sender.sendConsent(key: key, analytics: analytics, marketing: marketing, firstAnswer: first), first {
+                ConversionValues.recordAnswerReported(in: directory, log: log)
+            }
+        } else if reported == false {
+            // Counted, never identified: the call carries no key, and what remembers it is the Apple record, which
+            // holds no identifier either. Not taken, it is tried again on the next launch.
+            log.log("consent refused before this install had an identity, reporting the answer with no identifier")
+            if await sender.sendFirstRefusal(marketing: marketing) {
+                ConversionValues.recordAnswerReported(in: directory, log: log)
+            }
         } else {
-            log.log("consent refused before this install had an identity, so there is nothing to withdraw")
+            log.log("consent refused before this install had an identity, and the answer was reported before")
         }
 
         if analytics {
@@ -143,12 +157,19 @@ actor ConsentGate {
     // Stamped with the key and GRANTED here, because neither was known when the event was recorded. The first open
     // flag is written after the first open has gone to the transport, whether or not the server took it, because
     // there is no retry across launches; a flag written first would suppress an install that was never sent.
+    //
+    // The exception is a wrong configuration (a wrong address, or an api key the API refused): the first open
+    // certainly did not reach Trace, so the flag is not written and the next launch sends it again, which reports the
+    // install once the app ships with the configuration fixed.
     private func send(_ event: Event) async {
         var granted = event
         granted.anonUserKey = key
         granted.consentStatus = .granted
-        _ = await sender.send(granted)
-        if event.type == .firstOpen {
+        let delivery = await sender.send(granted)
+        guard event.type == .firstOpen else { return }
+        if delivery == .wrongConfiguration {
+            log.log("the first open did not reach the Trace API, so the next launch sends it again")
+        } else {
             Storage.setFlag(TraceClient.firstOpenFlag, in: directory, log: log)
         }
     }
