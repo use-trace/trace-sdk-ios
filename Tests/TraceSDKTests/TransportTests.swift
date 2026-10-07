@@ -35,8 +35,8 @@ struct TransportTests {
         let server = StubServer { _, _ in .body(200, "<!DOCTYPE html><html><body>Trace</body></html>") }
         let quiet = Transport(apiKey: "tk_placeholder", apiURL: server.url.absoluteString, session: server.session,
                               log: TraceLog(enabled: false, sink: capture.log.sink), backoff: .zero)
-        #expect(await quiet.send(firstOpen()) == .wrongAddress)
-        #expect(await quiet.send(firstOpen()) == .wrongAddress)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
         #expect(await quiet.sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
         #expect(server.requests.count == 3, "a wrong address stays wrong, so it is not retried")
         #expect(capture.lines.count == 1)
@@ -69,7 +69,7 @@ struct TransportTests {
                       #"{"cookie_set":true}"#])
     func aTwoHundredWithOtherJSONIsNotDeliveredOnTheEventRoute(body: String) async {
         let server = StubServer { _, _ in .body(202, body) }
-        #expect(await transport(server).send(firstOpen()) == .wrongAddress)
+        #expect(await transport(server).send(firstOpen()) == .wrongConfiguration)
         #expect(server.requests.count == 1)
     }
 
@@ -109,7 +109,7 @@ struct TransportTests {
     @Test(arguments: ["not a url", "ftp://example.test", ""])
     func anApiURLThatIsNotHTTPReturnsFalseAndSendsNothing(apiURL: String) async {
         let server = StubServer()
-        #expect(await transport(server, apiURL: apiURL).send(firstOpen()) == .wrongAddress)
+        #expect(await transport(server, apiURL: apiURL).send(firstOpen()) == .wrongConfiguration)
         #expect(server.requests.isEmpty)
     }
 

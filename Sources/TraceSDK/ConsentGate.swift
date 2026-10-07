@@ -152,7 +152,7 @@ actor ConsentGate {
         granted.consentStatus = .granted
         let delivery = await sender.send(granted)
         guard event.type == .firstOpen else { return }
-        if delivery == .wrongAddress {
+        if delivery == .wrongConfiguration {
             log.log("the first open did not reach the Trace API, so the next launch sends it again")
         } else {
             Storage.setFlag(TraceClient.firstOpenFlag, in: directory, log: log)

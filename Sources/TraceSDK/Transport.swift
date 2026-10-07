@@ -9,7 +9,7 @@ enum Delivery: Sendable {
     case failed
     /// The configured api url is not the Trace API: not an http url, or a 2xx without the API's answer. The event
     /// certainly did not reach Trace, so the consent gate does not mark a first open sent.
-    case wrongAddress
+    case wrongConfiguration
 }
 
 /// What the consent gate sends through. A protocol so a test can stand in for the network; the only conformer in
@@ -111,7 +111,7 @@ struct Transport: EventSender {
         guard let url = URL(string: baseURL + path), ["http", "https"].contains(url.scheme?.lowercased()),
               url.host?.isEmpty == false else {
             log.log("cannot send \(path): the configured api url is not an http url")
-            return .wrongAddress
+            return .wrongConfiguration
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -146,7 +146,7 @@ struct Transport: EventSender {
                     TraceLog(enabled: true, sink: log.sink).log("\(path) answered \(status) but not as the Trace API "
                         + "does, so nothing is being delivered: check the configured api url")
                 }
-                return (.wrongAddress, false, "answered \(status) without the Trace API's answer")
+                return (.wrongConfiguration, false, "answered \(status) without the Trace API's answer")
             case 400...499: return (.failed, false, "refused with \(status)")
             default: return (.failed, true, "server answered \(status)")
             }
