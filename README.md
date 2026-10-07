@@ -40,8 +40,7 @@ targets: [
 ]
 ```
 
-`0.1.0` is the first release, tagged on 6 October 2026. `0.2.0` adds Trace's conversion value schema and sends the
-platform with the consent call.
+Use `0.1.1` or later. `0.1.0` (6 October 2026) sent events to the dashboard's address instead of the API's, where they were answered and lost; `0.1.1` (7 October 2026) sends them to `https://app.usetrace.io/api-proxy`. `0.2.0` adds Trace's conversion value schema and sends the platform with the consent call.
 
 ## Initialising
 
@@ -80,7 +79,7 @@ the calls, so nothing does network work on the calling thread and nothing throws
 | Parameter | Default | What it is |
 | --- | --- | --- |
 | `apiKey` | required | The site's api key, sent as `x-trace-api-key`. |
-| `apiURL` | `https://app.usetrace.io` | Where to send. Change it only for a self hosted deployment. |
+| `apiURL` | `https://app.usetrace.io/api-proxy` | Where to send. Change it only for a self hosted deployment. |
 | `debugLogging` | `false` | Whether the SDK writes what it is doing to the unified log, subsystem `io.usetrace.sdk`. |
 
 `debugLogging` never writes an install id or an event's contents, whatever it is set to: anything shaped like an

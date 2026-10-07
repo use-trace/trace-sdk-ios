@@ -18,12 +18,66 @@ struct TransportTests {
     }
 
     // The lessons table, row 1: /v1/event answers 202 and /v1/consent 201, so a 200 only check fails every send.
-    @Test(arguments: [200, 201, 202, 204])
-    func anyTwoHundredIsASuccess(status: Int) async {
+    @Test(arguments: [200, 201, 202])
+    func anyTwoHundredWithTheApisAnswerIsASuccess(status: Int) async {
         let server = StubServer { _, _ in .status(status) }
         #expect(await transport(server).send(firstOpen()))
         #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true))
         #expect(server.requests.count == 2, "a success must not be retried")
+    }
+
+    // 7 October 2026: the default address reached the dashboard, which answers a POST with a web page and a 200, and
+    // every event was counted as delivered and lost. A 2xx that is not the API's answer is a wrong address: not
+    // delivered, not retried, and said in the log.
+    // Logged with the host app's logging off, because that is the developer who needs to hear it, and once, so a
+    // misconfigured app does not write a line for every event.
+    @Test func aTwoHundredWebPageIsNotDeliveredIsNotRetriedAndIsLoggedOnceWithLoggingOff() async {
+        let server = StubServer { _, _ in .body(200, "<!DOCTYPE html><html><body>Trace</body></html>") }
+        let quiet = Transport(apiKey: "tk_placeholder", apiURL: server.url.absoluteString, session: server.session,
+                              log: TraceLog(enabled: false, sink: capture.log.sink), backoff: .zero)
+        #expect(await quiet.send(firstOpen()) == false)
+        #expect(await quiet.send(firstOpen()) == false)
+        #expect(await quiet.sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true) == false)
+        #expect(server.requests.count == 3, "a wrong address stays wrong, so it is not retried")
+        #expect(capture.lines.count == 1)
+        #expect(capture.lines.first?.contains("check the configured api url") == true)
+    }
+
+    @Test(arguments: [
+        #"{"accepted":true}"#,
+        #"{"accepted":true,"buffered":true,"request_id":"req_placeholder"}"#,
+        #"{"accepted":true,"ignored":true,"reason":"ip_excluded"}"#,
+    ])
+    func aTwoHundredAndTwoWithAcceptedTrueIsDelivered(body: String) async {
+        let server = StubServer { _, _ in .body(202, body) }
+        #expect(await transport(server).send(firstOpen()))
+        #expect(server.requests.count == 1)
+    }
+
+    @Test(arguments: [
+        #"{"anon_user_key":null,"cookie_set":false,"journey_ref":null}"#,
+        #"{"anon_user_key":null,"cookie_set":false,"ignored":true,"reason":"ip_excluded"}"#,
+    ])
+    func aTwoHundredAndOneWithTheConsentAnswerIsDelivered(body: String) async {
+        let server = StubServer { _, _ in .body(201, body) }
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: false, marketing: false, firstAnswer: true))
+        #expect(server.requests.count == 1)
+    }
+
+    // Each route is held to its own answer, so the event's answer does not pass for the consent call's.
+    @Test(arguments: ["", "{}", "[]", "null", #"{"ok":true}"#, #"{"accepted":false}"#, #"{"accepted":"true"}"#,
+                      #"{"cookie_set":true}"#])
+    func aTwoHundredWithOtherJSONIsNotDeliveredOnTheEventRoute(body: String) async {
+        let server = StubServer { _, _ in .body(202, body) }
+        #expect(await transport(server).send(firstOpen()) == false)
+        #expect(server.requests.count == 1)
+    }
+
+    @Test(arguments: ["", "{}", "[]", #"{"ok":true}"#, #"{"accepted":true}"#, #"{"cookie_set":"true"}"#])
+    func aTwoHundredWithOtherJSONIsNotDeliveredOnTheConsentRoute(body: String) async {
+        let server = StubServer { _, _ in .body(201, body) }
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true) == false)
+        #expect(server.requests.count == 1)
     }
 
     // Row 2: a payload the server rejected it will reject again.

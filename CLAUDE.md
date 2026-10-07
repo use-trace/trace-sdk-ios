@@ -58,7 +58,11 @@ version 1 is never edited: a change is a new version, released on a date the ser
 
 ## Lessons from the Android SDK, already paid for
 
-- Success is any 2xx. `/v1/event` answers 202 and `/v1/consent` 201.
+- `/v1/event` answers 202 and `/v1/consent` 201, so success is not a 200 only.
+- Success is not any 2xx either: a send is delivered only when the body is the API's own answer, `"accepted": true`
+  for an event and a boolean `cookie_set` for consent. A 2xx without it is a wrong address (the dashboard answers a
+  POST with a web page and a 200, which lost every event from 0.1.0 on 7 October 2026): not delivered, not retried,
+  and logged once per launch even with logging off.
 - Never retry a 4xx.
 - On a consent grant, send the consent call before the held events, with the install id in it.
 - Stamp flushed events `GRANTED`, not the `UNKNOWN` they were recorded under, or the server quarantines them.
@@ -73,6 +77,14 @@ Needs full Xcode with its licence accepted. The core tests run with `swift test`
 CI also checks the rules above (`scripts/check-privacy.sh`) and the public API (`scripts/check-api.sh`, against
 `api/TraceSDK.swiftinterface`). After a deliberate change to anything public, run `scripts/check-api.sh --update`
 and commit the file with the change.
+
+`.github/workflows/newest-xcode.yml` runs the tests every Monday on `macos-latest` with the newest released Xcode
+there, and on the newest Xcode beta (allowed to fail, reported in the run's summary). It is the one workflow allowed
+a `-latest` runner: the house job in `ci.yml` exempts that file by name, and nothing else. A failure of the newest
+Xcode run opens one `incident` issue titled "Newest Xcode run is failing" and alerts, through a copy of the
+monorepo's shared recorder (a public repository cannot call a workflow in a private one); the next pass closes it.
+The beta job names its image by hand (`xcode-27` in October 2026); move it to the next image when GitHub announces
+one.
 
 **The privacy manifest is a statement every customer's app makes to Apple.** `Sources/TraceSDK/PrivacyInfo.xcprivacy`
 and the README's "What to declare to the stores" say what leaves the device. Sending a new field, or using a required
