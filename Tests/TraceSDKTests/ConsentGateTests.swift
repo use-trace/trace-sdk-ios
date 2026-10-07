@@ -11,19 +11,25 @@ final class RecordingSender: EventSender {
         var calls: [String] = []
         var events: [Event] = []
         var consentKeys: [String] = []
+        var firstAnswers: [Bool] = []
     }
 
     private let recorded = OSAllocatedUnfairLock(initialState: Recorded())
     private let consentDelay: Duration
+    private let refusalTaken: Bool
 
     /// `consentDelay` holds the consent call open, so a test can do something else while it is in flight.
-    init(consentDelay: Duration = .zero) {
+    /// `refusalTaken` false is a server that did not take the first refusal.
+    init(consentDelay: Duration = .zero, refusalTaken: Bool = true) {
         self.consentDelay = consentDelay
+        self.refusalTaken = refusalTaken
     }
 
     var calls: [String] { recorded.withLock { $0.calls } }
     var events: [Event] { recorded.withLock { $0.events } }
     var consentKeys: [String] { recorded.withLock { $0.consentKeys } }
+    /// `first_answer` on each consent call, the first refusal included, in order.
+    var firstAnswers: [Bool] { recorded.withLock { $0.firstAnswers } }
 
     func send(_ event: Event) async -> Bool {
         recorded.withLock {
@@ -33,13 +39,22 @@ final class RecordingSender: EventSender {
         return true
     }
 
-    func sendConsent(key: String, analytics: Bool, marketing: Bool) async -> Bool {
+    func sendConsent(key: String, analytics: Bool, marketing: Bool, firstAnswer: Bool) async -> Bool {
         recorded.withLock {
             $0.calls.append("consent analytics=\(analytics) marketing=\(marketing)")
             $0.consentKeys.append(key)
+            $0.firstAnswers.append(firstAnswer)
         }
         try? await Task.sleep(for: consentDelay)
         return true
+    }
+
+    func sendFirstRefusal(marketing: Bool) async -> Bool {
+        recorded.withLock {
+            $0.calls.append("first refusal marketing=\(marketing)")
+            $0.firstAnswers.append(true)
+        }
+        return refusalTaken
     }
 }
 
@@ -127,7 +142,8 @@ struct ConsentGateTests {
 
         let id = try #require(InstallId.peek(in: directory))
         #expect(sender.events.map(\.anonUserKey) == [id, id])
-        #expect(written == [TraceClient.firstOpenFlag, InstallId.fileName].sorted())
+        // The Apple record remembers that the first answer was reported. A real launch has already written it.
+        #expect(written == [TraceClient.firstOpenFlag, InstallId.fileName, ConversionValues.stateFile].sorted())
     }
 
     @Test(arguments: [false, true])
@@ -145,15 +161,59 @@ struct ConsentGateTests {
         #expect(sender.events.isEmpty)
     }
 
-    // Reporting a refusal must not create the identifier the person has just declined.
-    @Test func aRefusalBeforeThereIsAnyIdMintsNoneToReportIt() async {
+    // Reporting a refusal must not create the identifier the person has just declined. It is reported once, with no
+    // identifier, so the server can count it (the share who said yes, APP_MODELLED_INSTALLS.md decision 3).
+    @Test func aRefusalBeforeThereIsAnyIdMintsNoneAndIsReportedOnceWithNoIdentifier() async {
         let sender = RecordingSender()
 
         await gate(sender).setConsent(analytics: false, marketing: false)
+        await gate(sender).setConsent(analytics: false, marketing: false)
 
-        #expect(sender.calls.isEmpty)
+        #expect(sender.calls == ["first refusal marketing=false"], "a later launch's refusal is a repeat, not sent")
+        #expect(sender.consentKeys.isEmpty)
         #expect(InstallId.peek(in: directory) == nil)
-        #expect(!FileManager.default.fileExists(atPath: directory.appending(path: InstallId.fileName).path))
+        #expect(written == [ConversionValues.stateFile], "only the existing Apple record may remember it")
+    }
+
+    @Test func aFirstRefusalTheServerDidNotTakeIsReportedAgainOnTheNextLaunch() async {
+        await gate(RecordingSender(refusalTaken: false)).setConsent(analytics: false, marketing: false)
+
+        let next = RecordingSender()
+        await gate(next).setConsent(analytics: false, marketing: false)
+
+        #expect(next.calls == ["first refusal marketing=false"])
+    }
+
+    // Each install's answer is counted once: the first consent call says so, and every later one says it is not.
+    @Test func theFirstGrantIsTheFirstAnswerAndEveryLaterCallIsNot() async {
+        let first = RecordingSender()
+        let gate = gate(first)
+        await gate.setConsent(analytics: true, marketing: false)
+        await gate.setConsent(analytics: false, marketing: false)
+        let later = RecordingSender()
+        await self.gate(later).setConsent(analytics: true, marketing: false)
+
+        #expect(first.firstAnswers == [true, false], "a withdrawal is never a first answer")
+        #expect(later.firstAnswers == [false])
+    }
+
+    @Test func aGrantAfterAReportedRefusalIsNotAFirstAnswer() async {
+        await gate(RecordingSender()).setConsent(analytics: false, marketing: false)
+
+        let sender = RecordingSender()
+        await gate(sender).setConsent(analytics: true, marketing: false)
+
+        #expect(sender.firstAnswers == [false])
+    }
+
+    // An install that granted under 0.1.0 has an id and no record of having answered. Its grant is a repeat.
+    @Test func aGrantFromAnInstallThatAlreadyHadAnIdIsNotAFirstAnswer() async throws {
+        _ = try #require(InstallId.get(in: directory))
+        let sender = RecordingSender()
+
+        await gate(sender).setConsent(analytics: true, marketing: false)
+
+        #expect(sender.firstAnswers == [false])
     }
 
     @Test func anEventRecordedAfterAGrantIsSentStraightAwayAsGranted() async {
@@ -176,7 +236,7 @@ struct ConsentGateTests {
         await gate.record(event("afterwards"))
 
         #expect(sender.events.isEmpty)
-        #expect(written.isEmpty)
+        #expect(written == [ConversionValues.stateFile], "only the Apple record, remembering the answer was reported")
     }
 
     // An actor can interleave at every await. An event recorded while the grant's consent call is still in flight

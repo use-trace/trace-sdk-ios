@@ -106,6 +106,10 @@ actor ConsentGate {
 
     private func setConsentNow(analytics: Bool, marketing: Bool) async -> Bool {
         let key: String?
+        // Read before the grant can mint an id: a grant is the install's first answer only if it mints the id and no
+        // answer has been reported before (a refusal, or a grant the server took).
+        let minting = InstallId.read(in: directory) == .absent
+        let reported = ConversionValues.answerReported(in: directory)
         if analytics {
             key = InstallId.get(in: directory)
             if key == nil {
@@ -126,9 +130,19 @@ actor ConsentGate {
         held = []
 
         if let key {
-            _ = await sender.sendConsent(key: key, analytics: analytics, marketing: marketing)
+            let first = analytics && minting && reported == false
+            if await sender.sendConsent(key: key, analytics: analytics, marketing: marketing, firstAnswer: first), first {
+                ConversionValues.recordAnswerReported(in: directory, log: log)
+            }
+        } else if reported == false {
+            // Counted, never identified: the call carries no key, and what remembers it is the Apple record, which
+            // holds no identifier either. Not taken, it is tried again on the next launch.
+            log.log("consent refused before this install had an identity, reporting the answer with no identifier")
+            if await sender.sendFirstRefusal(marketing: marketing) {
+                ConversionValues.recordAnswerReported(in: directory, log: log)
+            }
         } else {
-            log.log("consent refused before this install had an identity, so there is nothing to withdraw")
+            log.log("consent refused before this install had an identity, and the answer was reported before")
         }
 
         if analytics {

@@ -11,7 +11,12 @@ protocol EventSender: Sendable {
     /// `key` is not optional. On a consent gated site the server buffers an event it received without consent and
     /// replays it once consent arrives, taking the anonymous key from this call. Without one the server mints a key
     /// of its own and records it as though it were this app's install id.
-    func sendConsent(key: String, analytics: Bool, marketing: Bool) async -> Bool
+    func sendConsent(key: String, analytics: Bool, marketing: Bool, firstAnswer: Bool) async -> Bool
+
+    /// Reports a refusal from an install that has no id, once, so the server can count the answer. It carries no
+    /// identifier of any kind: `consent_analytics` false, the marketing answer, the time, the platform, and
+    /// `first_answer` true. Returns whether the server took it. Never throws.
+    func sendFirstRefusal(marketing: Bool) async -> Bool
 }
 
 /// The only thing in this SDK that touches the network, through `URLSession` and nothing else.
@@ -71,15 +76,19 @@ struct Transport: EventSender {
         return accepted
     }
 
-    func sendConsent(key: String, analytics: Bool, marketing: Bool) async -> Bool {
-        let fields: [String: Any] = [
-            "consent_analytics": analytics,
-            "consent_marketing": marketing,
-            "anon_user_key": key,
-            "timestamp": Event.now(),
-            // The share of people who said yes is worked out per platform (decision 3 of APP_MODELLED_INSTALLS.md).
-            "platform": "ios",
-        ]
+    func sendConsent(key: String, analytics: Bool, marketing: Bool, firstAnswer: Bool) async -> Bool {
+        await postConsent(["consent_analytics": analytics, "consent_marketing": marketing, "anon_user_key": key,
+                           "first_answer": firstAnswer])
+    }
+
+    func sendFirstRefusal(marketing: Bool) async -> Bool {
+        await postConsent(["consent_analytics": false, "consent_marketing": marketing, "first_answer": true])
+    }
+
+    // The share of people who said yes is worked out per platform, counting each install's answer once by
+    // `first_answer` (decision 3 of APP_MODELLED_INSTALLS.md in use-trace/trace).
+    private func postConsent(_ answer: [String: Any]) async -> Bool {
+        let fields = answer.merging(["timestamp": Event.now(), "platform": "ios"]) { mine, _ in mine }
         guard let body = try? JSONSerialization.data(withJSONObject: fields) else { return false }
         let accepted = await post("/v1/consent", body)
         log.log("consent \(accepted ? "accepted" : "not accepted")")

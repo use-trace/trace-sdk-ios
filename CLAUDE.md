@@ -30,7 +30,9 @@ this SDK must obey, and it is kept current. What follows is the subset that bind
 - A visitor identity never appears in a log line.
 - **No identifier is written to the device before consent** (decided 6 October 2026, before the first release).
   Before an answer the first open and every conversion are held in memory only and no install id exists. A grant
-  writes `install_id`, and `first_open_sent` once the first open has been sent. A refusal writes no identifier. The
+  writes `install_id`, and `first_open_sent` once the first open has been sent. A refusal writes no identifier and
+  sends no identifier: with no install id it is reported once, anonymously, with `first_answer` true, so the server
+  can count each install's answer once (README, "Counting each answer once"). The
   consent answer is not stored at all: the host app keeps it and passes it on every launch. A process killed before
   an answer loses what was held, and the next launch records a first open again; that cost was accepted.
 - **The two Apple files are the exception, stored before consent.** Registering with Apple happens at first launch
@@ -38,7 +40,8 @@ this SDK must obey, and it is kept current. What follows is the subset that bind
   and only arrive if the app registered. `install_registered` is an empty file, written as soon as Apple takes the
   registration, so a later launch does not register again and reset the value. `conversion_value` is the conversion
   value schema's record (first launch time, window, whether it converted, its revenue, whether the host app owns the
-  value), never sent anywhere. It replaced 0.1.0's empty `conversion_value_raised`. Nothing identifying is ever
+  value, whether the first consent answer has reached Trace), never sent anywhere. It replaced 0.1.0's empty
+  `conversion_value_raised`. Nothing identifying is ever
   written before consent, and nothing else is written before it at all.
 - **The conversion value is set from everyone's conversions**, including people who said no and people who never
   answered (decided 7 October 2026, decision 2 of `docs/plans/APP_MODELLED_INSTALLS.md` in `use-trace/trace`). It is

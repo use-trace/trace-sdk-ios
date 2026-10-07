@@ -142,6 +142,25 @@ struct ConversionValueTests {
         #expect(registrar.updates == ["0 low", "37 high"])
     }
 
+    // The record also remembers that the first consent answer was reported, so it is never reported twice. Neither
+    // a registration that only succeeds after the answer nor a new window may forget it.
+    @Test func theReportedAnswerSurvivesALateRegistrationAndANewWindow() async {
+        let registrar = FakeRegistrar(failing: true)
+        await values(registrar).launched()
+        ConversionValues.recordAnswerReported(in: directory, log: capture.log)
+        await values(registrar).conversionRecorded(value: 9.99)
+        #expect(registrar.updates == ["0 low"], "a record started by the answer alone leaves the schema off")
+
+        let working = FakeRegistrar()
+        await values(working).launched()
+        await values(working).conversionRecorded(value: 9.99)
+        clock.set(hours: 50)
+        await values(working).launched()
+
+        #expect(working.updates == ["0 low", "22 high", "0 low"])
+        #expect(ConversionValues.answerReported(in: directory) == true)
+    }
+
     // StoreKit throws on a fine value outside 0 to 63. Refused here, so the host app sees a log line, not an error.
     @Test(arguments: [-1, 64, 1000, Int.min, Int.max])
     func aFineValueOutsideZeroToSixtyThreeIsRefused(fine: Int) async {

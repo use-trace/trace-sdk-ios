@@ -106,9 +106,10 @@ func consentBannerAnswered(analytics: Bool, marketing: Bool) {
   held whatever `marketing` says.
 
 A grant writes the install id, sends the consent record, then everything held, oldest first. A refusal throws away
-everything held and writes nothing. If an earlier grant left an install id, a refusal also sends the consent record,
-which withdraws that grant; with no install id there is nothing to withdraw and nothing is sent. Someone who refuses
-and later agrees is tracked from the moment they agreed.
+everything held and writes no identifier. If an earlier grant left an install id, a refusal also sends the consent
+record, which withdraws that grant. With no install id, the refusal is reported once, with no identifier, so that
+Trace can count it (see "Counting each answer once" below). Someone who refuses and later agrees is tracked from the
+moment they agreed.
 
 **Call `setConsent` on every launch, from the answer your app stored.** The SDK does not keep the answer: the
 consent record belongs to your app, which has to show it, change it and withdraw it.
@@ -125,10 +126,26 @@ No identifier before the person grants consent. Decided on 6 October 2026, befor
 
 | When | What the SDK writes, in `Application Support/io.usetrace.sdk`, excluded from backup |
 | --- | --- |
-| Whatever the answer, and before one | `install_registered`, an empty file, once the install is registered with Apple. `conversion_value`, the conversion value schema's record: when the app first launched, which of Apple's windows it is in, whether that window has had a conversion, the window's revenue, and whether your app has set its own value. Never sent anywhere. |
+| Whatever the answer, and before one | `install_registered`, an empty file, once the install is registered with Apple. `conversion_value`, the conversion value schema's record: when the app first launched, which of Apple's windows it is in, whether that window has had a conversion, the window's revenue, whether your app has set its own value, and whether this install's first consent answer has reached Trace. Never sent anywhere. |
 | Before an answer | Nothing else. The first open and any conversions are held in memory only, and no install id exists. |
 | On a grant | `install_id`, the install id, if there is not one yet. `first_open_sent`, once the first open has been sent. |
 | On a refusal | Nothing else. No identifier is written. |
+
+### Counting each answer once
+
+Trace works out the share of people who said yes, per platform, from each install's first answer. So every consent
+call says whether it is that first answer, and a refusal from an install with no id is reported, once, with nothing
+that identifies anyone:
+
+| Consent call | Sent | Fields |
+| --- | --- | --- |
+| A grant | On every launch | `consent_analytics` true, `consent_marketing`, `anon_user_key`, `timestamp`, `platform` `ios`, `first_answer` |
+| A refusal after an earlier grant | On every launch, and it withdraws that grant | as a grant, with `consent_analytics` false |
+| A refusal with no install id | Once, until Trace takes it; never again after | `consent_analytics` false, `consent_marketing`, `timestamp`, `platform` `ios`, `first_answer` true. No `anon_user_key` and no other identifier. |
+
+`first_answer` is true on this install's first answer only: a grant that mints the install id when no answer has been
+reported before, or the refusal above. Everything later says false. That the first answer has reached Trace is kept
+in the `conversion_value` record, so nothing more is written before consent.
 
 **The two Apple files are stored before consent, and neither holds an identifier.** `install_registered` is empty:
 its existence says the install was registered with Apple, so a later launch does not register again and reset the
@@ -255,13 +272,14 @@ the report to check your answers against. It says:
 
 ### What leaves the device
 
-Nothing, until your app calls `setConsent(analytics: true)` (`ConsentGate.swift`). After that:
+Before a grant, only a refusal, once, with no identifier: that the person said no, their marketing answer, the time,
+and that this is iOS (`ConsentGate.swift`, `Transport.swift`). After `setConsent(analytics: true)`:
 
 | Sent | Where it comes from |
 | --- | --- |
 | The install id, a random value minted on the grant | `InstallId.swift` |
 | What happened: a first open, a purchase or another conversion, and when | `Event.swift`, `Trace.swift` |
-| The consent answers, with the install id and that this is iOS, and the consent state of each event | `Transport.swift`, `ConsentGate.swift` |
+| The consent answers, with the install id, that this is iOS and whether this is the install's first answer, and the consent state of each event | `Transport.swift`, `ConsentGate.swift` |
 | Your app's version (`CFBundleShortVersionString`), and that this is an iOS app from the App Store | `Trace.swift`, `Event.swift` |
 | A conversion's name, value and metadata, as your app passes them | `Trace.swift` |
 | The SDK's version and the iOS version, in the user agent | `Transport.swift` |
@@ -282,7 +300,9 @@ responsible for disclosing data collected by Apple".
 ### Answers in App Store Connect
 
 **Do you or your third-party partners collect data from this app?** Yes, once your app grants consent through
-`setConsent`. App Store Connect has no answer for "only with consent".
+`setConsent`. App Store Connect has no answer for "only with consent". Before a grant the SDK sends only a refusal,
+once, with no identifier, which is Product Interaction not linked to the user; the row below already declares that
+type.
 
 | Data type | What the SDK sends | Linked to the user | Used for tracking | Purpose |
 | --- | --- | --- | --- | --- |

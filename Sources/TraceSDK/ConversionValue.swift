@@ -116,6 +116,26 @@ struct ConversionValues: Sendable {
         var revenue = 0.0
         /// The host app called `setConversionValue`, and from then on the value is the app's.
         var setByApp = false
+        /// The server has taken this install's first consent answer, so every later consent call is a repeat. Kept
+        /// here, not in a file of its own, so that nothing more is written before consent.
+        var answerReported = false
+    }
+
+    /// Whether the server has taken this install's first consent answer. False with no record yet, nil when the
+    /// record cannot be read, which is the phone before its first unlock after a reboot.
+    static func answerReported(in directory: URL) -> Bool? {
+        guard FileManager.default.fileExists(atPath: directory.appending(path: stateFile).path) else { return false }
+        return read(in: directory, log: .silent)?.answerReported
+    }
+
+    /// Records that the server took the first answer. With no record yet (an install 0.1.0 registered, or one whose
+    /// registration has not succeeded), one is started with a first launch of 0, long ago, which the schema leaves
+    /// alone; a registration that succeeds later starts the schema and keeps this.
+    static func recordAnswerReported(in directory: URL, log: TraceLog) {
+        let exists = FileManager.default.fileExists(atPath: directory.appending(path: stateFile).path)
+        guard var record = exists ? read(in: directory, log: log) : Record(firstLaunch: 0) else { return }
+        record.answerReported = true
+        save(record, in: directory, log: log)
     }
 
     private let directory: URL
@@ -137,7 +157,9 @@ struct ConversionValues: Sendable {
         if !Storage.flagIsSet(Self.registeredFlag, in: directory) {
             if await update(fine: 0, coarse: .low, reason: "registering the install") {
                 Storage.setFlag(Self.registeredFlag, in: directory, log: log)
-                save(Record(firstLaunch: now().timeIntervalSince1970))
+                var record = Record(firstLaunch: now().timeIntervalSince1970)
+                record.answerReported = Self.answerReported(in: directory) ?? false
+                save(record)
             }
             return
         }
@@ -180,12 +202,16 @@ struct ConversionValues: Sendable {
         else { return nil }
         // A clock set back does not reopen a closed window.
         guard window > record.window else { return (record, false) }
-        record = Record(firstLaunch: record.firstLaunch, window: window)
+        record = Record(firstLaunch: record.firstLaunch, window: window, answerReported: record.answerReported)
         return (record, true)
     }
 
-    private func read() -> Record? {
-        let file = directory.appending(path: Self.stateFile)
+    private func read() -> Record? { Self.read(in: directory, log: log) }
+
+    private func save(_ record: Record) { Self.save(record, in: directory, log: log) }
+
+    private static func read(in directory: URL, log: TraceLog) -> Record? {
+        let file = directory.appending(path: stateFile)
         guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         // ponytail: before the first unlock after a reboot this cannot be read, and a conversion then is left out of
         // the value. Only a background launch hits it; keep the conversion in memory for the next call if it matters.
@@ -196,9 +222,9 @@ struct ConversionValues: Sendable {
         return record
     }
 
-    private func save(_ record: Record) {
+    private static func save(_ record: Record, in directory: URL, log: TraceLog) {
         do {
-            try Storage.write(JSONEncoder().encode(record), to: directory.appending(path: Self.stateFile))
+            try Storage.write(JSONEncoder().encode(record), to: directory.appending(path: stateFile))
         } catch {
             log.log("could not record the conversion value, so the next update may not include this one")
         }

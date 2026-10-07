@@ -110,7 +110,7 @@ struct TraceClientTests {
         }
 
         #expect(registrar.updates == ["0 low", "16 high"])
-        #expect(sender.calls.isEmpty)
+        #expect(sender.events.isEmpty)
     }
 
     @Test func aPurchaseIsSentAsThePurchaseTypeWithItsValueAndAnythingElseAsCustom() async {
@@ -181,7 +181,7 @@ struct TraceClientTests {
         #expect(try written() == appleFlags)
     }
 
-    @Test func aRefusalWritesNoIdentifierAndSendsNothing() async throws {
+    @Test func aRefusalWritesNoIdentifierAndSendsOnlyTheAnswerWithNoIdentifier() async throws {
         let sender = RecordingSender()
 
         await launch(sender) {
@@ -191,7 +191,8 @@ struct TraceClientTests {
 
         #expect(try written() == appleFlags, "a refusal may write no identifier, no first open flag and no queue")
         #expect(InstallId.peek(in: directory) == nil)
-        #expect(sender.calls.isEmpty)
+        #expect(sender.calls == ["first refusal marketing=true"])
+        #expect(sender.consentKeys.isEmpty)
     }
 
     @Test func acceptanceWritesTheIdSendsExactlyOneFirstOpenWithItThenTheHeldEventsInOrder() async throws {
