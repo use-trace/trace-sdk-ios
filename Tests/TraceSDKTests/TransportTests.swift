@@ -21,7 +21,7 @@ struct TransportTests {
     @Test(arguments: [200, 201, 202])
     func anyTwoHundredWithTheApisAnswerIsASuccess(status: Int) async {
         let server = StubServer { _, _ in .status(status) }
-        #expect(await transport(server).send(firstOpen()))
+        #expect(await transport(server).send(firstOpen()) == .delivered)
         #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false))
         #expect(server.requests.count == 2, "a success must not be retried")
     }
@@ -35,8 +35,8 @@ struct TransportTests {
         let server = StubServer { _, _ in .body(200, "<!DOCTYPE html><html><body>Trace</body></html>") }
         let quiet = Transport(apiKey: "tk_placeholder", apiURL: server.url.absoluteString, session: server.session,
                               log: TraceLog(enabled: false, sink: capture.log.sink), backoff: .zero)
-        #expect(await quiet.send(firstOpen()) == false)
-        #expect(await quiet.send(firstOpen()) == false)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
         #expect(await quiet.sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
         #expect(server.requests.count == 3, "a wrong address stays wrong, so it is not retried")
         #expect(capture.lines.count == 1)
@@ -50,7 +50,7 @@ struct TransportTests {
     ])
     func aTwoHundredAndTwoWithAcceptedTrueIsDelivered(body: String) async {
         let server = StubServer { _, _ in .body(202, body) }
-        #expect(await transport(server).send(firstOpen()))
+        #expect(await transport(server).send(firstOpen()) == .delivered)
         #expect(server.requests.count == 1)
     }
 
@@ -69,7 +69,7 @@ struct TransportTests {
                       #"{"cookie_set":true}"#])
     func aTwoHundredWithOtherJSONIsNotDeliveredOnTheEventRoute(body: String) async {
         let server = StubServer { _, _ in .body(202, body) }
-        #expect(await transport(server).send(firstOpen()) == false)
+        #expect(await transport(server).send(firstOpen()) == .wrongConfiguration)
         #expect(server.requests.count == 1)
     }
 
@@ -81,35 +81,49 @@ struct TransportTests {
     }
 
     // Row 2: a payload the server rejected it will reject again.
-    @Test(arguments: [400, 401, 403, 413, 422])
+    @Test(arguments: [400, 413, 422])
     func aFourHundredIsAFailureAndIsNeverRetried(status: Int) async {
         let server = StubServer { _, _ in .status(status) }
-        #expect(await transport(server).send(firstOpen()) == false)
+        #expect(await transport(server).send(firstOpen()) == .failed)
         #expect(server.requests.count == 1)
+    }
+
+    // A wrong or revoked api key is a wrong configuration like a wrong address: not retried, said once with logging
+    // off, and reported apart from a failure so the consent gate sends the first open again on a later launch.
+    @Test(arguments: [401, 403])
+    func aRefusedKeyIsAWrongConfigurationIsNotRetriedAndIsLoggedOnceWithLoggingOff(status: Int) async {
+        let server = StubServer { _, _ in .status(status) }
+        let quiet = Transport(apiKey: "tk_placeholder", apiURL: server.url.absoluteString, session: server.session,
+                              log: TraceLog(enabled: false, sink: capture.log.sink), backoff: .zero)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
+        #expect(server.requests.count == 2)
+        #expect(capture.lines.count == 1)
+        #expect(capture.lines.first?.contains("check the configured api key") == true)
     }
 
     @Test func aFiveHundredIsRetriedThreeAttemptsInTotal() async {
         let server = StubServer { _, _ in .status(500) }
-        #expect(await transport(server).send(firstOpen()) == false)
+        #expect(await transport(server).send(firstOpen()) == .failed)
         #expect(server.requests.count == 3)
     }
 
     @Test func aFiveHundredThatClearsIsASuccessWithoutADuplicate() async {
         let server = StubServer { _, attempt in attempt == 1 ? .status(503) : .status(202) }
-        #expect(await transport(server).send(firstOpen()))
+        #expect(await transport(server).send(firstOpen()) == .delivered)
         #expect(server.requests.count == 2)
     }
 
     @Test func aNetworkFailureIsRetriedThreeAttemptsInTotalAndReturnsFalse() async {
         let server = StubServer { _, _ in .networkFailure }
-        #expect(await transport(server).send(firstOpen()) == false)
+        #expect(await transport(server).send(firstOpen()) == .failed)
         #expect(server.requests.count == 3)
     }
 
     @Test(arguments: ["not a url", "ftp://example.test", ""])
     func anApiURLThatIsNotHTTPReturnsFalseAndSendsNothing(apiURL: String) async {
         let server = StubServer()
-        #expect(await transport(server, apiURL: apiURL).send(firstOpen()) == false)
+        #expect(await transport(server, apiURL: apiURL).send(firstOpen()) == .wrongConfiguration)
         #expect(server.requests.isEmpty)
     }
 

@@ -25,12 +25,12 @@ final class RecordingSender: EventSender {
     var events: [Event] { recorded.withLock { $0.events } }
     var consentKeys: [String] { recorded.withLock { $0.consentKeys } }
 
-    func send(_ event: Event) async -> Bool {
+    func send(_ event: Event) async -> Delivery {
         recorded.withLock {
             $0.calls.append("event \(event.eventName ?? event.type.rawValue)")
             $0.events.append(event)
         }
-        return true
+        return .delivered
     }
 
     func sendConsent(key: String, analytics: Bool, marketing: Bool) async -> Bool {

@@ -143,12 +143,19 @@ actor ConsentGate {
     // Stamped with the key and GRANTED here, because neither was known when the event was recorded. The first open
     // flag is written after the first open has gone to the transport, whether or not the server took it, because
     // there is no retry across launches; a flag written first would suppress an install that was never sent.
+    //
+    // The exception is a wrong configuration (a wrong address, or an api key the API refused): the first open
+    // certainly did not reach Trace, so the flag is not written and the next launch sends it again, which reports the
+    // install once the app ships with the configuration fixed.
     private func send(_ event: Event) async {
         var granted = event
         granted.anonUserKey = key
         granted.consentStatus = .granted
-        _ = await sender.send(granted)
-        if event.type == .firstOpen {
+        let delivery = await sender.send(granted)
+        guard event.type == .firstOpen else { return }
+        if delivery == .wrongConfiguration {
+            log.log("the first open did not reach the Trace API, so the next launch sends it again")
+        } else {
             Storage.setFlag(TraceClient.firstOpenFlag, in: directory, log: log)
         }
     }
