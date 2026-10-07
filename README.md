@@ -351,3 +351,7 @@ to be declared as well.
   id would count one install twice, and the calls made meanwhile run, in order, on the first call after the phone
   is unlocked. They are kept in memory only, so if the app is ended before then, they are lost. Registering the
   install with Apple is not affected.
+
+## Licence
+
+Apache License, Version 2.0. See `LICENSE`.
