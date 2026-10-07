@@ -70,7 +70,7 @@ actor ConsentGate {
     /// create the identifier the person has just declined.
     ///
     /// Nothing is held when this returns, flushed or discarded, and a refusal writes nothing. A send the server did
-    /// not take is not kept: the transport has tried three times.
+    /// not take is not kept: the transport has already retried what was worth retrying.
     ///
     /// **Returns false, having changed nothing, when the install id exists and cannot be read**, which on iOS is the
     /// phone before its first unlock after a reboot. A grant then would flush the held events without the consent

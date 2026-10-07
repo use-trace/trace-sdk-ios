@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// What the consent gate sends through. A protocol so a test can stand in for the network; the only conformer in
 /// the SDK is ``Transport``.
@@ -21,8 +22,16 @@ protocol EventSender: Sendable {
 /// error thrown is a crash the customer did not write.
 ///
 /// It does not know about consent and it does not queue. It sends what it is given and says whether the server took
-/// it. Success is any 2xx: `/v1/event` answers 202 and `/v1/consent` 201. A 4xx is never retried, because a payload
-/// the server rejected it will reject again. A 5xx or a request that did not complete is tried three times in all.
+/// it. A 4xx is never retried, because a payload the server rejected it will reject again. A 5xx or a request that
+/// did not complete is tried three times in all.
+///
+/// **Delivered means a 2xx with the Trace API's own answer, not any 2xx.** `/v1/event` answers 202 with
+/// `"accepted": true`, and `/v1/consent` answers 201 with a boolean `cookie_set`. Until 7 October 2026 any 2xx counted,
+/// and the default address reached the dashboard, which answers a POST with a web page and a 200: every event was
+/// lost and nothing said so. A 2xx without that answer (a page, an empty body, some other JSON) is an address that is
+/// not the Trace API. It is not delivered and it is not retried, because a wrong address stays wrong. It is logged
+/// once per transport, whether or not the host app turned logging on, because a developer who never turned it on is
+/// the one who needs to hear it, and without the body, which could hold anything.
 struct Transport: EventSender {
 
     static let attempts = 3
@@ -47,6 +56,8 @@ struct Transport: EventSender {
     private let session: URLSession
     private let log: TraceLog
     private let backoff: Duration
+    /// Whether the configuration error has been logged, shared by every copy of this transport.
+    private let warned = OSAllocatedUnfairLock(initialState: false)
 
     /// `backoff` is multiplied by the attempt number between tries. Short, because the caller may hold the only
     /// copy of an install, and a long wait outlives the launch it belongs to. The tests pass zero.
@@ -99,7 +110,7 @@ struct Transport: EventSender {
         request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
 
         for attempt in 1...Self.attempts {
-            let outcome = await self.attempt(request)
+            let outcome = await self.attempt(request, path)
             if outcome.accepted { return true }
             guard outcome.worthRetrying, attempt < Self.attempts else {
                 log.log("\(path) failed on attempt \(attempt) of \(Self.attempts), \(outcome.reason), giving up")
@@ -112,12 +123,19 @@ struct Transport: EventSender {
         return false
     }
 
-    private func attempt(_ request: URLRequest) async -> (accepted: Bool, worthRetrying: Bool, reason: String) {
+    private func attempt(_ request: URLRequest, _ path: String) async
+        -> (accepted: Bool, worthRetrying: Bool, reason: String) {
         do {
-            let (_, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             switch status {
-            case 200...299: return (true, false, "accepted")
+            case 200...299 where Self.isTraceAnswer(data, to: path): return (true, false, "accepted")
+            case 200...299:
+                if !warned.withLock({ warned in defer { warned = true }; return warned }) {
+                    TraceLog(enabled: true, sink: log.sink).log("\(path) answered \(status) but not as the Trace API "
+                        + "does, so nothing is being delivered: check the configured api url")
+                }
+                return (false, false, "answered \(status) without the Trace API's answer")
             case 400...499: return (false, false, "refused with \(status)")
             default: return (false, true, "server answered \(status)")
             }
@@ -125,5 +143,11 @@ struct Transport: EventSender {
             // No connection, no answer, or an answer too late. The next attempt may find a network.
             return (false, true, "the request did not complete")
         }
+    }
+
+    /// Whether `data` is what the Trace API answers `path` with when it has taken the request.
+    private static func isTraceAnswer(_ data: Data, to path: String) -> Bool {
+        guard let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return false }
+        return path == "/v1/consent" ? answer["cookie_set"] is Bool : answer["accepted"] as? Bool == true
     }
 }
