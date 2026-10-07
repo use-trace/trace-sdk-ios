@@ -13,9 +13,6 @@ on:
   schedule:
     - cron: '41 3 * * 1'
   workflow_dispatch:
-  # Temporary, to prove the workflow on its pull request. Removed before merge.
-  pull_request:
-    paths: [.github/workflows/newest-xcode.yml]
 
 permissions:
   contents: read
@@ -97,7 +94,7 @@ jobs:
       - name: Record the outcome
         env:
           GH_TOKEN: ${{ github.token }}
-          TITLE: Test incident from the newest xcode workflow, ignore
+          TITLE: Newest Xcode run is failing
           OUTCOME: ${{ needs.newest.result }}
           BODY: The weekly newest Xcode run failed. It runs the tests on macos-latest with the newest released Xcode, so a customer on that Xcode may hit the same break.
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
