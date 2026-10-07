@@ -233,9 +233,9 @@ its `Info.plist`. Add both keys:
 
 ```xml
 <key>NSAdvertisingAttributionReportEndpoint</key>
-<string>https://TRACE-POSTBACK-DOMAIN-NOT-YET-CHOSEN.example</string>
+<string>https://usetrace-postbacks.com</string>
 <key>AttributionCopyEndpoint</key>
-<string>https://TRACE-POSTBACK-DOMAIN-NOT-YET-CHOSEN.example</string>
+<string>https://usetrace-postbacks.com</string>
 ```
 
 `NSAdvertisingAttributionReportEndpoint` is where SKAdNetwork sends its postback copies, and
@@ -244,9 +244,8 @@ second as "AdAttributionKit - Postback Copy URL", but the "AdAttributionKit" the
 `AdAttributionKit` dictionary, and a key nested inside one is ignored, so no postback copy would arrive and nothing
 would say so.
 
-**The domain above is a placeholder. Trace's postback domain has not been chosen yet**, and this README will name it
-when it has. Apple uses only the registrable domain and ignores any subdomain, so it will be a domain of its own.
-Until it is set, the SDK still registers the install with Apple, but no postback reaches Trace.
+`usetrace-postbacks.com` is Trace's postback domain. Apple uses only the registrable domain and ignores any
+subdomain, which is why it is a domain of its own rather than part of usetrace.io.
 
 ## What to declare to the stores
 
