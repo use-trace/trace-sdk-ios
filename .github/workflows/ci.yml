@@ -23,7 +23,8 @@ jobs:
       - name: Runners are pinned
         run: |
           # A moving label such as ubuntu-latest changes the machine under every job on GitHub's schedule, not ours.
-          if grep -nE '^[[:space:]]*runs-on:.*-latest' .github/workflows/*.yml; then
+          # The one exception is newest-xcode.yml, whose job is to follow the newest image on purpose.
+          if grep -nE '^[[:space:]]*runs-on:.*-latest' $(ls .github/workflows/*.yml | grep -vx .github/workflows/newest-xcode.yml); then
             echo "Pin the runner (ubuntu-24.04 or macos-15)." >&2
             exit 1
           fi
