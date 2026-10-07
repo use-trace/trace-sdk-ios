@@ -1,0 +1,102 @@
+name: release
+
+# Releasing (CLAUDE.md, Releasing). On a push to main, when the version in Sources/TraceSDK/Version.swift has no tag
+# yet and the merged pull request carries release-approved: tag the bare version (Swift Package Manager wants
+# x.y.z, no v), create the GitHub release with the pull request's notes, then build a throwaway package that depends
+# on this repository by URL at exactly that version.
+#
+# On a pull request, or started by hand, it is a dry run: nothing is tagged or released, and the throwaway package
+# resolves the pull request's own commit instead.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DRY_RUN: ${{ github.event_name != 'push' }}
+      GH_TOKEN: ${{ github.token }}
+    outputs:
+      go: ${{ steps.plan.outputs.go }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: What to release
+        id: plan
+        run: |
+          version=$(scripts/version.sh)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$DRY_RUN" = true ]; then
+            echo "Dry run of $version: nothing is tagged; a throwaway package resolves this commit." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "go=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The tag is the release for Swift Package Manager, and tags are never moved.
+          if git rev-parse -q --verify "refs/tags/$version" > /dev/null; then
+            echo "$version is tagged already. Nothing to release." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          latest=$(git tag -l '[0-9]*' --sort=-v:refname | head -1)
+          if [ -n "$latest" ] && [ "$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -1)" != "$version" ]; then
+            echo "::error::$version is not higher than the latest tag, $latest. Nothing was tagged."
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at != null)][0]' > "$RUNNER_TEMP/pr.json"
+          number=$(jq -r '.number // empty' "$RUNNER_TEMP/pr.json")
+          if [ -z "$number" ]; then
+            echo "::error::$version is not tagged, and no merged pull request was found for $GITHUB_SHA, so there is no release-approved to read. Nothing was tagged."
+            exit 1
+          fi
+          if ! jq -e '[.labels[].name] | index("release-approved")' "$RUNNER_TEMP/pr.json" > /dev/null; then
+            echo "::warning::$version is not tagged, and #$number did not carry release-approved, so nothing was released. To release $version, merge a pull request that carries release-approved, or add the label to #$number and re-run this run." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq -r --arg v "$version" '"\(.title)\n\n\(.body // "")\n\nFrom #\(.number). Install with Swift Package Manager from `\($v)`."' "$RUNNER_TEMP/pr.json" > "$RUNNER_TEMP/notes.md"
+          echo "Releasing $version from #$number." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "go=true" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and GitHub release
+        if: steps.plan.outputs.go == 'true' && env.DRY_RUN != 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+
+  resolve:
+    name: resolve
+    needs: release
+    if: needs.release.outputs.go == 'true'
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: A throwaway package resolves it by URL and builds
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          # The pull request's own commit, which is on GitHub, not the merge commit Actions builds, which is not.
+          REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = push ]; then
+            scripts/resolve-check.sh "$VERSION"
+          else
+            scripts/resolve-check.sh --revision "$REVISION"
+          fi

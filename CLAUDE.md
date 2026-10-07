@@ -94,3 +94,18 @@ and the README's "What to declare to the stores" say what leaves the device. Sen
 reason API, changes both, in the same pull request. `scripts/check-privacy-manifest.py` (in the `privacy` job) fails
 on an undeclared required reason API, a value Apple does not list, or a package built without the manifest, and
 `everyFieldThatLeavesTheDeviceIsOneTheStoreDeclarationsName` fails on a new field.
+
+## Releasing
+
+The version is `TraceSDKVersion.current` in `Sources/TraceSDK/Version.swift`, and the README's package line has to
+match it (`scripts/version.sh`). Swift Package Manager resolves the bare tag (`0.2.0`, no `v`), customers pin it, and
+a tag is never moved, so a release needs a person: a pull request that changes the version waits in the `version`
+job's "Waiting for release-approved" step until it carries `release-approved` (`.github/workflows/version.yml`).
+
+`.github/workflows/release.yml` does the rest on the push to `main`. When the version has no tag and the merged pull
+request carries `release-approved`, it tags the version at that commit, creates the GitHub release with the pull
+request's title and body as its notes, then builds a throwaway package that depends on this repository by URL at
+exactly that version (`scripts/resolve-check.sh`). A merged pull request without the label releases nothing and says
+so. On every pull request the same workflow is a dry run that resolves and builds the pull request's own commit.
+
+A bad release is fixed by a new patch version, never by moving a tag.
