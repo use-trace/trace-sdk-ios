@@ -79,7 +79,7 @@ the calls, so nothing does network work on the calling thread and nothing throws
 | Parameter | Default | What it is |
 | --- | --- | --- |
 | `apiKey` | required | The site's api key, sent as `x-trace-api-key`. |
-| `apiURL` | `https://app.usetrace.io` | Where to send. Change it only for a self hosted deployment. |
+| `apiURL` | `https://app.usetrace.io/api-proxy` | Where to send. Change it only for a self hosted deployment. |
 | `debugLogging` | `false` | Whether the SDK writes what it is doing to the unified log, subsystem `io.usetrace.sdk`. |
 
 `debugLogging` never writes an install id or an event's contents, whatever it is set to: anything shaped like an
