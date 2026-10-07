@@ -45,8 +45,9 @@ this SDK must obey, and it is kept current. What follows is the subset that bind
 - Success is not any 2xx either: a send is delivered only when the body is the API's own answer, `"accepted": true`
   for an event and a boolean `cookie_set` for consent. A 2xx without it is a wrong address (the dashboard answers a
   POST with a web page and a 200, which lost every event from 0.1.0 on 7 October 2026): not delivered, not retried,
-  and logged once per launch even with logging off. A first open sent to a wrong address is not marked sent, so
-  the next launch sends it again and the install is reported once the address is fixed. Any other failure still marks
+  and logged once per launch even with logging off. A 401 or 403 (a wrong or revoked api key) is the same kind
+  of wrong configuration. A first open sent with a wrong configuration is not marked sent, so the next launch sends
+  it again and the install is reported once the configuration is fixed. Any other failure still marks
   it sent: the server may have taken it.
 - Never retry a 4xx.
 - On a consent grant, send the consent call before the held events, with the install id in it.

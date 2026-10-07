@@ -144,8 +144,9 @@ actor ConsentGate {
     // flag is written after the first open has gone to the transport, whether or not the server took it, because
     // there is no retry across launches; a flag written first would suppress an install that was never sent.
     //
-    // The exception is a wrong address: the first open certainly did not reach Trace, so the flag is not written and
-    // the next launch sends it again, which reports the install once the app ships with the address fixed.
+    // The exception is a wrong configuration (a wrong address, or an api key the API refused): the first open
+    // certainly did not reach Trace, so the flag is not written and the next launch sends it again, which reports the
+    // install once the app ships with the configuration fixed.
     private func send(_ event: Event) async {
         var granted = event
         granted.anonUserKey = key
