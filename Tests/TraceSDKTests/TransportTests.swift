@@ -81,11 +81,25 @@ struct TransportTests {
     }
 
     // Row 2: a payload the server rejected it will reject again.
-    @Test(arguments: [400, 401, 403, 413, 422])
+    @Test(arguments: [400, 413, 422])
     func aFourHundredIsAFailureAndIsNeverRetried(status: Int) async {
         let server = StubServer { _, _ in .status(status) }
         #expect(await transport(server).send(firstOpen()) == .failed)
         #expect(server.requests.count == 1)
+    }
+
+    // A wrong or revoked api key is a wrong configuration like a wrong address: not retried, said once with logging
+    // off, and reported apart from a failure so the consent gate sends the first open again on a later launch.
+    @Test(arguments: [401, 403])
+    func aRefusedKeyIsAWrongConfigurationIsNotRetriedAndIsLoggedOnceWithLoggingOff(status: Int) async {
+        let server = StubServer { _, _ in .status(status) }
+        let quiet = Transport(apiKey: "tk_placeholder", apiURL: server.url.absoluteString, session: server.session,
+                              log: TraceLog(enabled: false, sink: capture.log.sink), backoff: .zero)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
+        #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
+        #expect(server.requests.count == 2)
+        #expect(capture.lines.count == 1)
+        #expect(capture.lines.first?.contains("check the configured api key") == true)
     }
 
     @Test func aFiveHundredIsRetriedThreeAttemptsInTotal() async {

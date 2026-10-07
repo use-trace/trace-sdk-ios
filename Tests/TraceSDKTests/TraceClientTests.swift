@@ -65,7 +65,20 @@ struct TraceClientTests {
         #expect(firstOpens(later) == 0, "once delivered, the first open is not sent again")
     }
 
-    // The rule the case above is the exception to: a first open the transport gave up on for any other reason is
+    // A wrong or revoked api key is the same: the first open never reached Trace, so a later launch sends it again.
+    @Test(arguments: [401, 403])
+    func aFirstOpenRefusedForItsKeyIsSentAgainOnceTheKeyIsFixed(status: Int) async throws {
+        let refusing = StubServer { _, _ in .status(status) }
+        await launchGranted(through: refusing)
+        #expect(firstOpens(refusing) == 1)
+        #expect(try written() == [InstallId.fileName, ConversionValues.registeredFlag].sorted())
+
+        let fixed = StubServer()
+        await launchGranted(through: fixed)
+        #expect(firstOpens(fixed) == 1)
+    }
+
+    // The rule the cases above are the exception to: a first open the transport gave up on for any other reason is
     // still marked sent, because the server may have taken it and there is no retry across launches.
     @Test func aFirstOpenThatFailedForAnyOtherReasonIsNotSentAgain() async {
         let broken = StubServer { _, _ in .status(500) }
