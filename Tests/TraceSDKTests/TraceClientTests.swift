@@ -32,6 +32,64 @@ struct TraceClientTests {
         #expect(second.calls == ["consent analytics=true marketing=false"])
     }
 
+    /// A launch that sends through the real transport to `server`, granting consent.
+    private func launchGranted(through server: StubServer) async {
+        let transport = Transport(apiKey: "tk_placeholder", apiURL: server.url.absoluteString, session: server.session,
+                                  log: capture.log, backoff: .zero)
+        let client = TraceClient(directory: directory, sender: transport, registrar: FakeRegistrar(), log: capture.log)
+        client.launch()
+        client.setConsent(analytics: true, marketing: false)
+        await client.idle()
+    }
+
+    private func firstOpens(_ server: StubServer) -> Int {
+        server.requests.filter { $0.path == "/v1/event" && $0.json["event_type"] as? String == "FIRST_OPEN" }.count
+    }
+
+    // An app shipped with a wrong address (the dashboard answers a POST with a web page and a 200) reports its
+    // installs once the address is fixed, instead of having marked each one sent. Nothing new is written for it: the
+    // grant writes the install id as it always has, and the first open flag waits.
+    @Test func aFirstOpenThatReachedAWrongAddressIsSentAgainOnceTheAddressIsFixed() async throws {
+        let wrong = StubServer { _, _ in .body(200, "<!DOCTYPE html><html><body>Trace</body></html>") }
+        await launchGranted(through: wrong)
+        #expect(firstOpens(wrong) == 1)
+        #expect(try written() == ([InstallId.fileName] + appleFlags).sorted(),
+                "a first open that never reached Trace must not be marked sent, and nothing else is written for it")
+
+        let fixed = StubServer()
+        await launchGranted(through: fixed)
+        #expect(firstOpens(fixed) == 1)
+
+        let later = StubServer()
+        await launchGranted(through: later)
+        #expect(firstOpens(later) == 0, "once delivered, the first open is not sent again")
+    }
+
+    // A wrong or revoked api key is the same: the first open never reached Trace, so a later launch sends it again.
+    @Test(arguments: [401, 403])
+    func aFirstOpenRefusedForItsKeyIsSentAgainOnceTheKeyIsFixed(status: Int) async throws {
+        let refusing = StubServer { _, _ in .status(status) }
+        await launchGranted(through: refusing)
+        #expect(firstOpens(refusing) == 1)
+        #expect(try written() == ([InstallId.fileName] + appleFlags).sorted())
+
+        let fixed = StubServer()
+        await launchGranted(through: fixed)
+        #expect(firstOpens(fixed) == 1)
+    }
+
+    // The rule the cases above are the exception to: a first open the transport gave up on for any other reason is
+    // still marked sent, because the server may have taken it and there is no retry across launches.
+    @Test func aFirstOpenThatFailedForAnyOtherReasonIsNotSentAgain() async {
+        let broken = StubServer { _, _ in .status(500) }
+        await launchGranted(through: broken)
+        #expect(firstOpens(broken) == Transport.attempts)
+
+        let fixed = StubServer()
+        await launchGranted(through: fixed)
+        #expect(firstOpens(fixed) == 0)
+    }
+
     @Test func theFirstOpenFlagIsExcludedFromBackup() async throws {
         await launch(RecordingSender()) { $0.setConsent(analytics: true, marketing: false) }
 

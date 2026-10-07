@@ -31,12 +31,12 @@ final class RecordingSender: EventSender {
     /// `first_answer` on each consent call, the first refusal included, in order.
     var firstAnswers: [Bool] { recorded.withLock { $0.firstAnswers } }
 
-    func send(_ event: Event) async -> Bool {
+    func send(_ event: Event) async -> Delivery {
         recorded.withLock {
             $0.calls.append("event \(event.eventName ?? event.type.rawValue)")
             $0.events.append(event)
         }
-        return true
+        return .delivered
     }
 
     func sendConsent(key: String, analytics: Bool, marketing: Bool, firstAnswer: Bool) async -> Bool {
