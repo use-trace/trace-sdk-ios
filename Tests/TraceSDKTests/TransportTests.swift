@@ -29,12 +29,18 @@ struct TransportTests {
     // 7 October 2026: the default address reached the dashboard, which answers a POST with a web page and a 200, and
     // every event was counted as delivered and lost. A 2xx that is not the API's answer is a wrong address: not
     // delivered, not retried, and said in the log.
-    @Test func aTwoHundredWebPageIsNotDeliveredIsNotRetriedAndIsLogged() async {
+    // Logged with the host app's logging off, because that is the developer who needs to hear it, and once, so a
+    // misconfigured app does not write a line for every event.
+    @Test func aTwoHundredWebPageIsNotDeliveredIsNotRetriedAndIsLoggedOnceWithLoggingOff() async {
         let server = StubServer { _, _ in .body(200, "<!DOCTYPE html><html><body>Trace</body></html>") }
-        #expect(await transport(server).send(firstOpen()) == false)
-        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
-        #expect(server.requests.count == 2, "a wrong address stays wrong, so it is not retried")
-        #expect(capture.lines.filter { $0.contains("check the configured api url") }.count == 2)
+        let quiet = Transport(apiKey: "tk_placeholder", apiURL: server.url.absoluteString, session: server.session,
+                              log: TraceLog(enabled: false, sink: capture.log.sink), backoff: .zero)
+        #expect(await quiet.send(firstOpen()) == false)
+        #expect(await quiet.send(firstOpen()) == false)
+        #expect(await quiet.sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
+        #expect(server.requests.count == 3, "a wrong address stays wrong, so it is not retried")
+        #expect(capture.lines.count == 1)
+        #expect(capture.lines.first?.contains("check the configured api url") == true)
     }
 
     @Test(arguments: [
