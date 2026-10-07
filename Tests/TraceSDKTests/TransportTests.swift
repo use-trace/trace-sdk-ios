@@ -22,7 +22,7 @@ struct TransportTests {
     func anyTwoHundredWithTheApisAnswerIsASuccess(status: Int) async {
         let server = StubServer { _, _ in .status(status) }
         #expect(await transport(server).send(firstOpen()) == .delivered)
-        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false))
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true))
         #expect(server.requests.count == 2, "a success must not be retried")
     }
 
@@ -37,7 +37,7 @@ struct TransportTests {
                               log: TraceLog(enabled: false, sink: capture.log.sink), backoff: .zero)
         #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
         #expect(await quiet.send(firstOpen()) == .wrongConfiguration)
-        #expect(await quiet.sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
+        #expect(await quiet.sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true) == false)
         #expect(server.requests.count == 3, "a wrong address stays wrong, so it is not retried")
         #expect(capture.lines.count == 1)
         #expect(capture.lines.first?.contains("check the configured api url") == true)
@@ -60,7 +60,7 @@ struct TransportTests {
     ])
     func aTwoHundredAndOneWithTheConsentAnswerIsDelivered(body: String) async {
         let server = StubServer { _, _ in .body(201, body) }
-        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: false, marketing: false))
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: false, marketing: false, firstAnswer: true))
         #expect(server.requests.count == 1)
     }
 
@@ -76,7 +76,7 @@ struct TransportTests {
     @Test(arguments: ["", "{}", "[]", #"{"ok":true}"#, #"{"accepted":true}"#, #"{"cookie_set":"true"}"#])
     func aTwoHundredWithOtherJSONIsNotDeliveredOnTheConsentRoute(body: String) async {
         let server = StubServer { _, _ in .body(201, body) }
-        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false) == false)
+        #expect(await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true) == false)
         #expect(server.requests.count == 1)
     }
 
@@ -131,7 +131,7 @@ struct TransportTests {
     @Test func theUserAgentSaysWhichSDKAndIsNeverEmpty() async throws {
         let server = StubServer()
         _ = await transport(server).send(firstOpen())
-        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false)
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true)
         for request in server.requests {
             let agent = try #require(request.header("User-Agent"))
             #expect(agent.wholeMatch(of: /TraceSdkIOS\/\d+\.\d+\.\d+ \(iOS \d+\.\d+\.\d+\)/) != nil, "user agent was [\(agent)]")
@@ -142,7 +142,7 @@ struct TransportTests {
     @Test func theApiKeyAndContentTypeTravelOnTheEventAndOnTheConsentCall() async {
         let server = StubServer()
         _ = await transport(server).send(firstOpen())
-        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false)
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true)
         #expect(server.requests.map(\.path) == ["/v1/event", "/v1/consent"])
         for request in server.requests {
             #expect(request.request.httpMethod == "POST")
@@ -163,17 +163,45 @@ struct TransportTests {
         }
     }
 
+    // Decided 7 October 2026 (decision 3 of APP_MODELLED_INSTALLS.md in use-trace/trace): the share of people who
+    // said yes is worked out per platform, so the consent call says which platform answered. Never an identifier.
+    @Test func theConsentCallSaysItIsFromAnIOSApp() async throws {
+        let server = StubServer()
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: false, marketing: false, firstAnswer: false)
+        #expect(try #require(server.requests.first).json["platform"] as? String == "ios")
+    }
+
+    @Test func aConsentCallSaysWhetherItIsTheFirstAnswer() async throws {
+        let server = StubServer()
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true)
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: false)
+        #expect(server.requests.map { $0.json["first_answer"] as? Bool } == [true, false])
+    }
+
+    // A refusal from an install with no id is counted, never identified: no key, nothing else that could be one.
+    @Test func aFirstRefusalCarriesNoIdentifier() async throws {
+        let server = StubServer()
+        #expect(await transport(server).sendFirstRefusal(marketing: true))
+        let request = try #require(server.requests.first)
+        #expect(request.path == "/v1/consent")
+        #expect(Set(request.json.keys) == ["consent_analytics", "consent_marketing", "timestamp", "platform", "first_answer"])
+        #expect(request.json["consent_analytics"] as? Bool == false)
+        #expect(request.json["consent_marketing"] as? Bool == true)
+        #expect(request.json["first_answer"] as? Bool == true)
+        #expect(request.json["platform"] as? String == "ios")
+    }
+
     // Row 3: the server takes the key for a replayed event from the consent call, so the consent call carries it.
     @Test func theInstallIdIsOnEveryEventAndOnTheConsentCall() async {
         let server = StubServer()
         _ = await transport(server).send(firstOpen())
-        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false)
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true)
         #expect(server.requests.map { $0.json["anon_user_key"] as? String } == [placeholderKey, placeholderKey])
     }
 
     @Test func aConsentCallSendsBothAnswersAsBooleansAndATimestamp() async throws {
         let server = StubServer()
-        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false)
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true)
         let body = try #require(server.requests.first).json
         #expect(body["consent_analytics"] as? Bool == true)
         #expect(body["consent_marketing"] as? Bool == false)
@@ -192,14 +220,14 @@ struct TransportTests {
             // A conversion: the app's name for it, its value and its metadata. The SDK never fills in the two
             // conversion_ fields today; they are named so that starting to send them is still a change seen here.
             "event_name", "value", "metadata", "conversion_type_id", "conversion_value",
-            // The consent call: the two answers.
-            "consent_analytics", "consent_marketing",
+            // The consent call: the two answers, and whether this is the install's first answer.
+            "consent_analytics", "consent_marketing", "first_answer",
         ]
         let server = StubServer()
         _ = await transport(server).send(Event(type: .purchase, anonUserKey: placeholderKey, consentStatus: .granted,
                                                appVersion: "1.0", eventName: "purchase", value: 1,
                                                conversionTypeId: "ct", conversionValue: 1, metadata: ["plan": "plus"]))
-        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false)
+        _ = await transport(server).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true)
         #expect(server.requests.count == 2)
         #expect(Set(server.requests.flatMap { $0.json.keys }) == declared)
     }
@@ -221,7 +249,7 @@ struct TransportTests {
     @Test func everyOutcomeIsLoggedAndNoLineCarriesAnIdentity() async {
         let accepted = StubServer()
         _ = await transport(accepted).send(firstOpen())
-        _ = await transport(accepted).sendConsent(key: placeholderKey, analytics: true, marketing: false)
+        _ = await transport(accepted).sendConsent(key: placeholderKey, analytics: true, marketing: false, firstAnswer: true)
         _ = await transport(StubServer { _, _ in .status(400) }).send(firstOpen())
         _ = await transport(StubServer { _, _ in .status(500) }).send(firstOpen())
         _ = await transport(StubServer { _, _ in .networkFailure }).send(firstOpen())

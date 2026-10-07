@@ -1,0 +1,447 @@
+{
+  "about": "Trace's conversion value schema, version 1, as test vectors. The same file is in use-trace/trace-sdk-ios (Tests/TraceSDKTests/conversion-value-vectors.json) and use-trace/trace (apps/api/src/app-reports/conversion-value-vectors.json); the copies must match byte for byte. Hours are since the install's first launch. A conversion's value is revenue in the site's currency; null is a conversion with no value. Window 1 is hours 0 to 48 and carries a fine value and a coarse value, window 2 is 48 to 168 and window 3 is 168 to 840, each carrying a coarse value from that window's conversions only. Fine 0 is opened, nothing else; 1 is at least one conversion and no revenue; 2 is revenue below the first edge; 3 to 63 are revenue at or above each edge in turn, the last holding everything from 1000 up. Coarse is low with no conversion, high with revenue at or above high_revenue, medium otherwise.",
+  "schema_version": 1,
+  "window_end_hours": [
+    48,
+    168,
+    840
+  ],
+  "high_revenue": 4.5,
+  "fine_band_lower_edges": [
+    1.0,
+    1.12,
+    1.25,
+    1.4,
+    1.6,
+    1.8,
+    2.0,
+    2.24,
+    2.5,
+    2.8,
+    3.15,
+    3.55,
+    4.0,
+    4.5,
+    5.0,
+    5.6,
+    6.3,
+    7.1,
+    8.0,
+    9.0,
+    10.0,
+    11.2,
+    12.5,
+    14.0,
+    16.0,
+    18.0,
+    20.0,
+    22.4,
+    25.0,
+    28.0,
+    31.5,
+    35.5,
+    40.0,
+    45.0,
+    50.0,
+    56.0,
+    63.0,
+    71.0,
+    80.0,
+    90.0,
+    100.0,
+    112.0,
+    125.0,
+    140.0,
+    160.0,
+    180.0,
+    200.0,
+    224.0,
+    250.0,
+    280.0,
+    315.0,
+    355.0,
+    400.0,
+    450.0,
+    500.0,
+    560.0,
+    630.0,
+    710.0,
+    800.0,
+    900.0,
+    1000.0
+  ],
+  "vectors": [
+    {
+      "name": "Opened, nothing else",
+      "conversions": [],
+      "expected": {
+        "fine": 0,
+        "coarse": [
+          "low",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "One conversion with no value",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": null
+        }
+      ],
+      "expected": {
+        "fine": 1,
+        "coarse": [
+          "medium",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "A conversion with a value of 0 is a conversion with no revenue",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 0
+        }
+      ],
+      "expected": {
+        "fine": 1,
+        "coarse": [
+          "medium",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "A negative value is no revenue: refunds are not subtracted",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": -5
+        }
+      ],
+      "expected": {
+        "fine": 1,
+        "coarse": [
+          "medium",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Revenue below the smallest edge is band 2",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 0.99
+        }
+      ],
+      "expected": {
+        "fine": 2,
+        "coarse": [
+          "medium",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Revenue exactly on the smallest edge is band 3",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 1.0
+        }
+      ],
+      "expected": {
+        "fine": 3,
+        "coarse": [
+          "medium",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "A price just below the high amount is medium",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 4.49
+        }
+      ],
+      "expected": {
+        "fine": 15,
+        "coarse": [
+          "medium",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Revenue exactly on the high amount is high",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 4.5
+        }
+      ],
+      "expected": {
+        "fine": 16,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "A common price point sits just below an edge",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 4.99
+        }
+      ],
+      "expected": {
+        "fine": 16,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Revenue is the sum of the window's conversions",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 2.99
+        },
+        {
+          "hours": 30,
+          "value": 2.99
+        }
+      ],
+      "expected": {
+        "fine": 18,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "A later conversion with no value never lowers the value",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 50
+        },
+        {
+          "hours": 2,
+          "value": null
+        }
+      ],
+      "expected": {
+        "fine": 37,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Just below the top edge",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 999.99
+        }
+      ],
+      "expected": {
+        "fine": 62,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Exactly the top edge is the top band",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 1000
+        }
+      ],
+      "expected": {
+        "fine": 63,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Everything above the top edge is the top band",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 25000
+        }
+      ],
+      "expected": {
+        "fine": 63,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "47.9 hours is still window 1",
+      "conversions": [
+        {
+          "hours": 47.9,
+          "value": 9.99
+        }
+      ],
+      "expected": {
+        "fine": 22,
+        "coarse": [
+          "high",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "48 hours is window 2, which carries a coarse value only",
+      "conversions": [
+        {
+          "hours": 48,
+          "value": 9.99
+        }
+      ],
+      "expected": {
+        "fine": 0,
+        "coarse": [
+          "low",
+          "high",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "167.9 hours is still window 2",
+      "conversions": [
+        {
+          "hours": 167.9,
+          "value": null
+        }
+      ],
+      "expected": {
+        "fine": 0,
+        "coarse": [
+          "low",
+          "medium",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "168 hours is window 3",
+      "conversions": [
+        {
+          "hours": 168,
+          "value": 1
+        }
+      ],
+      "expected": {
+        "fine": 0,
+        "coarse": [
+          "low",
+          "low",
+          "medium"
+        ]
+      }
+    },
+    {
+      "name": "839.9 hours is still window 3",
+      "conversions": [
+        {
+          "hours": 839.9,
+          "value": 20
+        }
+      ],
+      "expected": {
+        "fine": 0,
+        "coarse": [
+          "low",
+          "low",
+          "high"
+        ]
+      }
+    },
+    {
+      "name": "35 days after the first launch nothing is set",
+      "conversions": [
+        {
+          "hours": 840,
+          "value": 100
+        }
+      ],
+      "expected": {
+        "fine": 0,
+        "coarse": [
+          "low",
+          "low",
+          "low"
+        ]
+      }
+    },
+    {
+      "name": "Each window counts only its own conversions",
+      "conversions": [
+        {
+          "hours": 1,
+          "value": 20
+        },
+        {
+          "hours": 50,
+          "value": null
+        },
+        {
+          "hours": 200,
+          "value": 1
+        },
+        {
+          "hours": 300,
+          "value": 4
+        }
+      ],
+      "expected": {
+        "fine": 29,
+        "coarse": [
+          "high",
+          "medium",
+          "high"
+        ]
+      }
+    }
+  ]
+}
