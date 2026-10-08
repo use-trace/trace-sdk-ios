@@ -8,8 +8,9 @@ The SDK is deliberately small. It does four things, and one more that only iOS n
 2. Sends the first open once.
 3. Sends conversions.
 4. Holds events until the consent state is known, then sends or discards them.
-5. Registers the install with Apple's conversion value API on the first launch, so that Apple sends Trace a
-   postback for it at all, and sets the value from conversions by Trace's conversion value schema.
+5. Registers the install with Apple's conversion value API, so that Apple sends Trace a postback for it at all, and
+   sets the value from conversions by Trace's conversion value schema. Where consent is required this waits for a
+   yes, like everything else (see "Before consent, by region").
 
 It does not do screen views, session tracking, automatically collected events, funnels or crash reporting.
 
@@ -33,14 +34,14 @@ In Xcode, File, Add Package Dependencies, and enter `https://github.com/use-trac
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/use-trace/trace-sdk-ios", from: "0.2.0"),
+    .package(url: "https://github.com/use-trace/trace-sdk-ios", from: "0.3.0"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [.product(name: "TraceSDK", package: "trace-sdk-ios")]),
 ]
 ```
 
-Use `0.1.1` or later. `0.1.0` (6 October 2026) sent events to the dashboard's address instead of the API's, where they were answered and lost; `0.1.1` (7 October 2026) sends them to `https://app.usetrace.io/api-proxy`. `0.2.0` adds Trace's conversion value schema and sends the platform with the consent call.
+Use `0.1.1` or later. `0.1.0` (6 October 2026) sent events to the dashboard's address instead of the API's, where they were answered and lost; `0.1.1` (7 October 2026) sends them to `https://app.usetrace.io/api-proxy`. `0.2.0` adds Trace's conversion value schema and sends the platform with the consent call. `0.3.0` follows the site's region: on a UK or EU site it registers with Apple and sets Apple's conversion value only after a yes, and on any site a no stops the value and removes the Apple files; see "Before consent, by region". Use `0.3.0` or later on a UK or EU app.
 
 ## Initialising
 
@@ -89,7 +90,8 @@ identity is removed where the line is written.
 
 **Nothing is sent to Trace and no identifier is stored until you call `setConsent`.** Until then every event,
 including the first open, is held in memory and sent to nobody, and no install id exists. An app that never calls it
-sends nothing to Trace and writes only the two Apple files described below, which is correct and not a fault.
+sends nothing to Trace, which is correct and not a fault. On a UK or EU site it writes nothing at all and tells Apple
+nothing; on a US or Other site it writes only the Apple files described below.
 
 Wire it to your own consent interface, on the answer:
 
@@ -104,31 +106,57 @@ func consentBannerAnswered(analytics: Bool, marketing: Bool) {
 - `marketing` goes to Trace for the consent record and decides nothing here, so `analytics: false` discards what was
   held whatever `marketing` says.
 
-A grant writes the install id, sends the consent record, then everything held, oldest first. A refusal throws away
-everything held and writes no identifier. If an earlier grant left an install id, a refusal also sends the consent
-record, which withdraws that grant. With no install id, the refusal is reported once, with no identifier, so that
+A grant writes the install id, sends the consent record, then everything held, oldest first, and registers the
+install with Apple if it was not registered. A refusal throws away everything held, writes no identifier, stops
+Apple's conversion value and removes the two Apple files. If an earlier grant left an install id, a refusal also
+sends the consent record, which withdraws that grant. With no install id, the refusal is reported once, with no identifier, so that
 Trace can count it (see "Counting each answer once" below). Someone who refuses and later agrees is tracked from the
 moment they agreed.
 
 **Call `setConsent` on every launch, from the answer your app stored.** The SDK does not keep the answer: the
 consent record belongs to your app, which has to show it, change it and withdraw it.
 
-Registering the install with Apple, and setting Apple's conversion value from conversions, do not wait for consent.
-They send nothing to Trace and no identity anywhere: they tell Apple's own privacy preserving attribution system, on
-the device, that the app launched and what the person did in it, and Apple then reports the campaign at campaign
-level, with no identifier for the person, on its own terms. The SDK's record of what it has told Apple is two files,
-written whatever the person answers; see the next section for why.
+### Before consent, by region
+
+The SDK follows your site's region in Trace, as the website tracking tag does. At launch it asks Trace, with your api
+key, whether the site is consent gated (`GET /v1/snippet-config`), and keeps the last answer only when it is "not
+gated".
+
+| Your site's region | Before the person answers | After a yes | After a no, or a withdrawal |
+| --- | --- | --- | --- |
+| UK and EU, or no region set | Nothing is told to Apple and nothing is written to the device. | The install is registered with Apple, the two Apple files are written, and the value is set from conversions, including any made before the yes in that launch. | Nothing is set, and the two Apple files are removed. |
+| US or Other | Five seconds after `initialise`, the install is registered with Apple, the two Apple files are written, and the value is set from conversions, including any made in those five seconds. | Registered at once, if it was not. | Nothing more is set, and the two Apple files are removed. |
+
+If the SDK cannot ask (no network, an older API) and has no earlier "not gated" answer, it treats the site as consent
+gated.
+
+On a US or Other site the SDK waits five seconds after `initialise` before registering, whatever the network does, and
+applies every call your app made in that time first. So a stored refusal passed within five seconds of `initialise`
+(as in "Initialising" above) stops the registration. A refusal that arrives later comes after the registration: Apple
+keeps that registration, which a US or Other site allows, and from the refusal on nothing more is set and the two
+Apple files are removed. On a UK or EU site nothing is registered before a yes, however late the answer comes.
+
+Registering and setting the value send nothing to Trace and no identity anywhere: they tell Apple's own attribution
+system, on the device, that the app launched and what the person did in it, and Apple then reports the campaign at
+campaign level, with no identifier for the person, on its own terms. Decided by Dom on 8 October 2026 after legal
+advice: registering with Apple and its two files are storage on the device, which needs consent where consent is
+required (PECR regulation 6, ePrivacy article 5(3)), and a conversion value is set only for someone who said yes.
+
+**What this costs on a UK or EU site.** Apple sends no postback for an install that never registered, so Apple reports
+only the installs of people who said yes within 60 days of installing. Installs from people who said no or never
+answered reach neither Trace nor the ad network.
 
 ## What is stored on the device, and when
 
-No identifier before the person grants consent. Decided on 6 October 2026, before the first release.
+No identifier before the person grants consent. Decided on 6 October 2026, before the first release. On a UK or EU
+site, nothing at all before an answer, decided on 8 October 2026.
 
 | When | What the SDK writes, in `Application Support/io.usetrace.sdk`, excluded from backup |
 | --- | --- |
-| Whatever the answer, and before one | `install_registered`, an empty file, once the install is registered with Apple. `conversion_value`, the conversion value schema's record: when the app first launched, which of Apple's windows it is in, whether that window has had a conversion, the window's revenue, whether your app has set its own value, and whether this install's first consent answer has reached Trace. Never sent anywhere. |
-| Before an answer | Nothing else. The first open and any conversions are held in memory only, and no install id exists. |
-| On a grant | `install_id`, the install id, if there is not one yet. `first_open_sent`, once the first open has been sent. |
-| On a refusal | Nothing else. No identifier is written. |
+| Before an answer, UK and EU site | Nothing. The first open and any conversions are held in memory only, and no install id exists. |
+| Before an answer, US or Other site | `site_not_consent_gated`, an empty file, Trace's last answer about the site. `install_registered`, an empty file, once the install is registered with Apple. `conversion_value`, the conversion value schema's record: when the install was registered, which of Apple's windows it is in, whether that window has had a conversion, the window's revenue, and whether your app has set its own value. Never sent anywhere. |
+| On a grant | `install_id`, the install id, if there is not one yet. `first_open_sent`, once the first open has been sent. `install_registered` and `conversion_value`, if they were not there. `answer_reported`, an empty file, once Trace has counted this install's first answer. |
+| On a refusal or a withdrawal | `install_registered` and `conversion_value` are removed. `answer_reported`, an empty file, once Trace has counted the refusal. No identifier is written. |
 
 ### Counting each answer once
 
@@ -144,18 +172,17 @@ that identifies anyone:
 
 `first_answer` is true on this install's first answer only: a grant that mints the install id when no answer has been
 reported before, or the refusal above. Everything later says false. That the first answer has reached Trace is kept
-in the `conversion_value` record, so nothing more is written before consent.
+in `answer_reported`, an empty file written after the answer, never before one, like the website banner's record of a
+refusal. `0.2.0` kept it in the `conversion_value` record, which a refusal now removes; `0.3.0` still reads it there.
 
-**The two Apple files are stored before consent, and neither holds an identifier.** `install_registered` is empty:
-its existence says the install was registered with Apple, so a later launch does not register again and reset the
-value to fine 0, coarse `low`. `conversion_value` is what the schema needs to set the value across launches: the
-revenue of a window is summed over every launch in it, and the window is worked out from the first launch. Apple's
-postbacks carry no device or user identifier, and they only arrive if the app registered, so registering happens at
-first launch whatever the person answers, and the value is set from everyone's conversions (decided 7 October 2026,
-see "Trace's conversion value schema").
+**Neither Apple file holds an identifier.** `install_registered` is empty: its existence says the install was
+registered with Apple, so a later launch does not register again and reset the value to fine 0, coarse `low`.
+`conversion_value` is what the schema needs to set the value across launches: the revenue of a window is summed over
+every launch in it, and the window is worked out from the registration. When they are written is in "Before consent,
+by region".
 
-`0.1.0` wrote an empty `conversion_value_raised` file instead of the record. `0.2.0` neither writes nor reads it. An
-install registered by `0.1.0` has no record of when it first launched, so `0.2.0` leaves its value as it was.
+`0.1.0` wrote an empty `conversion_value_raised` file instead of the record. `0.2.0` and later neither write nor read
+it. An install registered by `0.1.0` has no record of when it first launched, so the SDK leaves its value as it was.
 
 The SDK does not store the consent answer. Your app does, and passes it to `setConsent` on every launch.
 
@@ -179,9 +206,9 @@ Trace has no per conversion currency and a parameter it dropped would be mislead
 `metadata` is anything else worth keeping with the conversion. Trace keeps keys of letters, digits and underscores,
 up to fifty of them, and drops the rest, so the SDK logs which of yours it will drop. Put nothing identifying in it.
 
-Every conversion also sets Apple's conversion value, by Trace's schema, below, whether or not the person has
-said yes. It never reaches Trace from the device: Apple sends it in its postback, at campaign level, with no
-identifier.
+A conversion also sets Apple's conversion value, by Trace's schema, below, when Apple may hear it: after a yes, or
+before an answer on a US or Other site, never after a no (see "Before consent, by region"). It never reaches Trace
+from the device: Apple sends it in its postback, at campaign level, with no identifier.
 
 If your app's postbacks go to a measurement partner with its own conversion value schema, set the value yourself:
 
@@ -189,15 +216,17 @@ If your app's postbacks go to a measurement partner with its own conversion valu
 Trace.setConversionValue(fine: 12, coarse: .high)
 ```
 
-`fine` must be 0 to 63; anything else is refused with a log line. Once you have set a value the SDK leaves it alone,
+It follows consent as a conversion does. `fine` must be 0 to 63; anything else is refused with a log line. Once you have set a value the SDK leaves it alone,
 in that launch and every later one. Trace reads every postback it receives by its own schema, so do not set your own
 value if your postbacks come to Trace. A StoreKit error is logged and never reaches your app.
 
 ## Trace's conversion value schema
 
 Version 1, the same for every app. Trace reads Apple's postbacks by it, so it is not configurable, and a change to
-it is a new version. The windows are Apple's, counted from the app's first launch: window 1 is the first 48 hours,
-window 2 runs to 7 days, window 3 to 35 days. After 35 days nothing is set.
+it is a new version. The windows are Apple's, counted by the SDK from the registration: window 1 is the first 48
+hours, window 2 runs to 7 days, window 3 to 35 days. After 35 days nothing is set. Where registering waits for a yes,
+the SDK's windows start at the yes; Apple says its own start at the app's first launch, so for someone who said yes
+days later, the SDK's window may be later than Apple's.
 
 - **A conversion** is a `Trace.conversion` call, and its `value` is revenue in your site's currency. A value that is
   missing, zero or negative is a conversion with no revenue: refunds are not subtracted.
@@ -263,15 +292,16 @@ the report to check your answers against. It says:
 - **No tracking**, and no tracking domains.
 - **Collected:** Device ID, Product Interaction and Purchase History, each linked to the user, none used for
   tracking, all for Analytics. The reasons are in the table below.
-- **No required reason API.** The SDK keeps its files in Application Support, reads whether a flag file exists
-  and reads its own files' contents (`Storage.swift`, `ConversionValue.swift`), none of which is on Apple's list; it does not use `UserDefaults`, file timestamps, disk
+- **No required reason API.** The SDK keeps its files in Application Support, reads whether a flag file exists,
+  removes its own files and reads their contents (`Storage.swift`, `ConversionValue.swift`), none of which is on Apple's list; it does not use `UserDefaults`, file timestamps, disk
   space, system boot time or the active keyboards. CI fails if the code starts to use one the manifest does not
   declare (`scripts/check-privacy-manifest.py`).
 
 ### What leaves the device
 
-Before a grant, only a refusal, once, with no identifier: that the person said no, their marketing answer, the time,
-and that this is iOS (`ConsentGate.swift`, `Transport.swift`). After `setConsent(analytics: true)`:
+Before a grant, about the person only a refusal, once, with no identifier: that the person said no, their marketing
+answer, the time, and that this is iOS (`ConsentGate.swift`, `Transport.swift`). Each launch also asks Trace whether
+the site is consent gated, which carries nothing about the person. After `setConsent(analytics: true)`:
 
 | Sent | Where it comes from |
 | --- | --- |
@@ -289,8 +319,9 @@ The SDK sends no advertising identifier, no vendor identifier, no name, email ad
 no contacts, no device model and nothing from other apps. It shows no App Tracking Transparency prompt and needs
 none.
 
-Registering the install with Apple at first launch, and setting the conversion value (`ConversionValue.swift`), send
-nothing to Trace. Apple's own
+Asking Trace whether the site is consent gated sends the api key, the SDK's version and the iOS version, and nothing
+about the person (`Transport.swift`). Registering the install with Apple and setting the conversion value
+(`ConversionValue.swift`) send nothing to Trace. Apple's own
 system sends the campaign to the postback domain later, at campaign level, with no identifier for the person or the
 device. That is data Apple collects, so the SDK's manifest does not declare it; Apple's page says you are "not
 responsible for disclosing data collected by Apple".
@@ -348,8 +379,14 @@ to be declared as well.
   been unlocked once since it started. An app launched in the background before then, by a push notification or a
   background refresh, finds the id and cannot read it. The SDK then sends nothing and mints nothing, because a new
   id would count one install twice, and the calls made meanwhile run, in order, on the first call after the phone
-  is unlocked. They are kept in memory only, so if the app is ended before then, they are lost. Registering the
-  install with Apple is not affected.
+  is unlocked. They are kept in memory only, so if the app is ended before then, they are lost. On a US or Other
+  site, registering the install with Apple is not affected.
+- **On a UK or EU site, Apple reports only the people who said yes.** Apple sends no postback for an install that
+  never registered, and registering waits for a yes, so installs from people who said no or never answered are
+  reported to neither Trace nor the ad network that showed the ad. Apple gives the app 60 days after the install to
+  register.
+- **A refusal is counted once by an empty file.** `answer_reported` is written after Trace has counted the install's
+  first answer, a refusal included, so the share who said yes counts each install once. It holds nothing.
 
 ## Licence
 

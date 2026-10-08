@@ -17,12 +17,15 @@ final class RecordingSender: EventSender {
     private let recorded = OSAllocatedUnfairLock(initialState: Recorded())
     private let consentDelay: Duration
     private let refusalTaken: Bool
+    private let gated: Bool?
 
     /// `consentDelay` holds the consent call open, so a test can do something else while it is in flight.
-    /// `refusalTaken` false is a server that did not take the first refusal.
-    init(consentDelay: Duration = .zero, refusalTaken: Bool = true) {
+    /// `refusalTaken` false is a server that did not take the first refusal. `gated` is what the site's config says,
+    /// nil for no answer (offline, or an older API).
+    init(consentDelay: Duration = .zero, refusalTaken: Bool = true, gated: Bool? = nil) {
         self.consentDelay = consentDelay
         self.refusalTaken = refusalTaken
+        self.gated = gated
     }
 
     var calls: [String] { recorded.withLock { $0.calls } }
@@ -47,6 +50,11 @@ final class RecordingSender: EventSender {
         }
         try? await Task.sleep(for: consentDelay)
         return true
+    }
+
+    // Answers at once. Nothing in the SDK's ordering depends on how long the site takes to answer.
+    func consentGated() async -> Bool? {
+        gated
     }
 
     func sendFirstRefusal(marketing: Bool) async -> Bool {
@@ -142,8 +150,8 @@ struct ConsentGateTests {
 
         let id = try #require(InstallId.peek(in: directory))
         #expect(sender.events.map(\.anonUserKey) == [id, id])
-        // The Apple record remembers that the first answer was reported. A real launch has already written it.
-        #expect(written == [TraceClient.firstOpenFlag, InstallId.fileName, ConversionValues.stateFile].sorted())
+        // The empty flag remembers that the first answer was reported.
+        #expect(written == [TraceClient.firstOpenFlag, InstallId.fileName, ConsentGate.answerReportedFlag].sorted())
     }
 
     @Test(arguments: [false, true])
@@ -172,7 +180,7 @@ struct ConsentGateTests {
         #expect(sender.calls == ["first refusal marketing=false"], "a later launch's refusal is a repeat, not sent")
         #expect(sender.consentKeys.isEmpty)
         #expect(InstallId.peek(in: directory) == nil)
-        #expect(written == [ConversionValues.stateFile], "only the existing Apple record may remember it")
+        #expect(written == [ConsentGate.answerReportedFlag], "only the empty answer flag may remember it")
     }
 
     @Test func aFirstRefusalTheServerDidNotTakeIsReportedAgainOnTheNextLaunch() async {
@@ -206,6 +214,18 @@ struct ConsentGateTests {
         #expect(sender.firstAnswers == [false])
     }
 
+    // 0.2.0 kept "the first answer reached Trace" in the conversion value record. An install that answered under it
+    // is not counted a second time by 0.3.0, which keeps it in an empty flag instead.
+    @Test func anAnswerA020RecordSaysWasReportedIsNotReportedAgain() async throws {
+        try Storage.write(Data(#"{"schema":1,"firstLaunch":0,"window":0,"converted":false,"revenue":0,"setByApp":false,"answerReported":true}"#.utf8),
+                          to: directory.appending(path: ConversionValues.stateFile))
+        let sender = RecordingSender()
+
+        await gate(sender).setConsent(analytics: false, marketing: false)
+
+        #expect(sender.calls.isEmpty)
+    }
+
     // An install that granted under 0.1.0 has an id and no record of having answered. Its grant is a repeat.
     @Test func aGrantFromAnInstallThatAlreadyHadAnIdIsNotAFirstAnswer() async throws {
         _ = try #require(InstallId.get(in: directory))
@@ -236,7 +256,7 @@ struct ConsentGateTests {
         await gate.record(event("afterwards"))
 
         #expect(sender.events.isEmpty)
-        #expect(written == [ConversionValues.stateFile], "only the Apple record, remembering the answer was reported")
+        #expect(written == [ConsentGate.answerReportedFlag], "only the empty flag, remembering the answer was reported")
     }
 
     // An actor can interleave at every await. An event recorded while the grant's consent call is still in flight

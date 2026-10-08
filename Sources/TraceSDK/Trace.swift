@@ -11,7 +11,8 @@ import os
 ///
 /// **It does four things, and one more on iOS.** It persists an install scoped anonymous key, sends the first open
 /// once, sends conversions, and holds everything until the app says what the person answered. And it registers the
-/// install with Apple's conversion value API on the first launch, without which Apple sends no postback at all.
+/// install with Apple's conversion value API, without which Apple sends no postback at all: on a consent gated site
+/// (UK and EU, or no region) once the person says yes, and on a US or Other site at first launch unless they said no.
 ///
 /// **No advertising identifier, no tracking prompt, no hashed email.** It does not import `AdSupport` or
 /// `AppTrackingTransparency`, and there is no way to pass it an email, a hash of one or a customer id.
@@ -23,10 +24,11 @@ import os
 ///
 /// **No identifier is written to the device before consent.** Before the person has answered, the first open and
 /// every conversion are held in memory only, and no install id exists. A grant writes the install id, and the first
-/// open flag once the first open has been sent. A refusal writes no identifier. The only files written before an
-/// answer are the two recording what the SDK has told Apple, the registration flag and the conversion value record,
-/// which hold no identifier. An app killed before an answer loses what was held, and its next launch records a
-/// first open again.
+/// open flag once the first open has been sent. A refusal writes no identifier. On a consent gated site nothing at
+/// all is written before an answer. On a US or Other site the two files recording what the SDK has told Apple, the
+/// registration flag and the conversion value record, are written at first launch, with the site's answer; none
+/// holds an identifier. An app killed before an answer loses what was held, and its next launch records a first open
+/// again.
 ///
 /// **Before the first unlock after a reboot it waits.** An app launched in the background then, by a push or a
 /// background refresh, finds the install id's file and cannot read it, because iOS has not decrypted it yet. The SDK
@@ -37,15 +39,17 @@ public enum Trace {
 
     private static let client = OSAllocatedUnfairLock<TraceClient?>(initialState: nil)
 
-    /// Starts the SDK, registers the install with Apple, and records the first open. Call it once, as early in the
-    /// launch as the app can, before ``setConsent(analytics:marketing:)``. A second call does nothing.
+    /// Starts the SDK and records the first open. Call it once, as early in the launch as the app can, before
+    /// ``setConsent(analytics:marketing:)``. A second call does nothing.
     ///
     /// The first open is held in memory with everything else until ``setConsent(analytics:marketing:)`` says what the
     /// person answered, and it is sent once, ever. An app that never calls it sends nothing and stores nothing, which
     /// is correct rather than a bug.
     ///
-    /// Registering with Apple does not wait for consent: it sends nothing to Trace and no identity anywhere. See
-    /// ``setConversionValue(fine:coarse:)``.
+    /// It asks the site, with the api key, whether it is consent gated, as the website tag does. On a gated site, or
+    /// when there is no answer and none kept from before, registering with Apple waits for a grant. On a site that is
+    /// not gated it happens five seconds after this call, behind every call the app made in that time, so a refusal
+    /// passed within it comes first; a refusal after it stops the value and removes the files.
     public static func initialise(_ config: TraceConfig) {
         #if os(iOS)
         let registrar = StoreKitRegistrar()
@@ -53,7 +57,7 @@ public enum Trace {
         let registrar = NoRegistrar()
         #endif
         initialise(config, directory: Storage.defaultDirectory, session: Transport.defaultSession,
-                   registrar: registrar, log: TraceLog(enabled: config.debugLogging))
+                   registrar: registrar, log: TraceLog(enabled: config.debugLogging), grace: TraceClient.grace)
     }
 
     /// Records what the person answered, which is what lets anything be sent at all.
@@ -62,8 +66,9 @@ public enum Trace {
     /// nothing here, so `analytics: false` discards what was held whatever `marketing` says.
     ///
     /// A grant writes the install id if there is none yet, sends the consent record, then everything held, oldest
-    /// first. A refusal throws away everything held and writes nothing; when an earlier grant left an install id, it
-    /// also sends the consent record, which withdraws that grant. **Call it on every launch**, from the
+    /// first, and registers with Apple if it has not. A refusal throws away everything held, stops Apple's value and
+    /// removes the two Apple files; when an earlier grant left an install id, it also sends the consent record, which
+    /// withdraws that grant. **Call it on every launch**, from the
     /// answer the app stored: the SDK does not keep the answer, because the consent record is the app's to show,
     /// change and withdraw, and two copies of it would disagree.
     public static func setConsent(analytics: Bool, marketing: Bool) {
@@ -80,8 +85,10 @@ public enum Trace {
     /// `metadata` is anything else worth keeping with it. The server keeps keys of letters, digits and underscores,
     /// up to 50, and drops the rest, so the log says which it will drop. Put nothing identifying in it.
     ///
-    /// Held while consent is unknown, dropped if it was refused, sent otherwise. Whatever the answer, it also sets
-    /// Apple's conversion value by Trace's schema (``ConversionValueSchema``), unless the app has set its own value.
+    /// Held while consent is unknown, dropped if it was refused, sent otherwise. It also sets Apple's conversion value
+    /// by Trace's schema (``ConversionValueSchema``), unless the app has set its own value: after a grant, or before an
+    /// answer on a site that is not gated, never after a refusal. On a gated site a conversion before the answer
+    /// sets the value when the person says yes.
     public static func conversion(_ name: String, value: Double?, metadata: [String: String]) {
         current("conversion")?.conversion(name, value: value, metadata: metadata)
     }
@@ -93,9 +100,8 @@ public enum Trace {
     /// `fine` is 0 to 63; anything else is refused with a log line rather than passed to StoreKit to throw. It goes
     /// to SKAdNetwork on iOS 16.1 and later and to AdAttributionKit on iOS 17.4 and later.
     ///
-    /// **It does not need Trace consent.** It sends nothing to Trace and no identity anywhere: it updates a value held
-    /// by Apple's own privacy preserving attribution system on the device, which Apple reports at campaign level, if
-    /// at all, on its own terms. A StoreKit error is logged and never reaches the app.
+    /// **It follows consent like a conversion does**: after a grant, or before an answer on a site that is not gated,
+    /// never after a refusal. A StoreKit error is logged and never reaches the app.
     public static func setConversionValue(fine: Int, coarse: CoarseValue) {
         current("setConversionValue")?.setConversionValue(fine: fine, coarse: coarse)
     }
@@ -113,8 +119,9 @@ public enum Trace {
     }
 
     // The injectable form, so a test can drive the real thing against a stub server and a fake registrar.
+    /// `grace` nil is a grace period that only ends when a test ends it, through ``endGraceForTest()``.
     static func initialise(_ config: TraceConfig, directory: URL, session: URLSession,
-                           registrar: any ConversionValueRegistrar, log: TraceLog) {
+                           registrar: any ConversionValueRegistrar, log: TraceLog, grace: Duration? = TraceClient.grace) {
         if config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             log.log("Trace.initialise was given a blank api key, so nothing was started")
             return
@@ -131,6 +138,12 @@ public enum Trace {
             return
         }
         started.launch()
+        if let grace {
+            Task {
+                try? await Task.sleep(for: grace)
+                started.endGrace()
+            }
+        }
     }
 
     private static func current(_ method: String) -> TraceClient? {
@@ -139,6 +152,11 @@ public enum Trace {
             return nil
         }
         return current
+    }
+
+    /// Ends the grace period now, behind everything called so far. Tests only.
+    static func endGraceForTest() {
+        client.withLock { $0 }?.endGrace()
     }
 
     /// Waits for everything called so far. Tests only.
@@ -162,6 +180,10 @@ actor TraceClient {
 
     static let firstOpenFlag = "first_open_sent"
 
+    /// An empty file: the site's last answer was that it is not consent gated (a US or Other site). Written only then,
+    /// so a gated site writes nothing, and no file, the same as no answer, reads as gated.
+    static let notGatedFlag = "site_not_consent_gated"
+
     /// What could not run because the install id could not be read, waiting for a call that can.
     private enum Waiting: Sendable {
         case consent(analytics: Bool, marketing: Bool)
@@ -174,6 +196,7 @@ actor TraceClient {
     nonisolated let directory: URL
     nonisolated let log: TraceLog
     private nonisolated let values: ConversionValues
+    private nonisolated let sender: any EventSender
     private let gate: ConsentGate
     // ponytail: unbounded, and only ever filled between a reboot and the first unlock, by a background launch. Bound
     // it if an app is found calling Trace in a loop in that window.
@@ -182,18 +205,42 @@ actor TraceClient {
     private var firstOpenRecorded = false
     private nonisolated let tail = OSAllocatedUnfairLock<Task<Void, Never>?>(initialState: nil)
 
+    // What Apple may hear (the legal adviser's answers, decided by Dom on 8 October 2026). Registering the install,
+    // writing the two Apple files and every conversion value update wait for a grant on a consent gated site, as the
+    // website tag waits, and on a site that is not gated they happen unless the person refused. A refusal or a
+    // withdrawal stops them and removes the files. None of this is stored: the answer is the host app's.
+
+    /// This launch's answer, nil until ``setConsent(analytics:marketing:)``.
+    private var consent: Bool?
+    /// The site's rule: this launch's answer from the API, else the last one kept, else gated.
+    private var gated: Bool
+    /// On a site that is not gated the SDK registers only once the grace period after ``launch()`` is over, so that
+    /// an answer the app passes during it is applied first, whatever the network does. ``endGrace()`` queues the end
+    /// behind every call made before it; the network answer is filled in by the launch, which is queued first.
+    static let grace: Duration = .seconds(5)
+    /// Whether this launch's grace period is over. Until then only a grant lets Apple hear anything.
+    private var graceEnded = false
+    /// Whether this launch has registered with Apple, or found it already registered, with permission.
+    private var toldApple = false
+    /// Value updates made while Apple may not hear them yet, in order, for a grant to apply. In memory only, bounded
+    /// like the held events, and thrown away by a refusal.
+    private var forApple: [@Sendable () async -> Void] = []
+
     init(directory: URL = Storage.defaultDirectory, sender: any EventSender, registrar: any ConversionValueRegistrar,
          log: TraceLog) {
         self.directory = directory
         self.log = log
+        self.sender = sender
         values = ConversionValues(directory: directory, registrar: registrar, log: log)
         gate = ConsentGate(directory: directory, sender: sender, log: log)
+        gated = !Storage.flagIsSet(Self.notGatedFlag, in: directory)
     }
 
-    /// Registers the install with Apple, then records the first open if it has never been recorded.
+    /// Asks the site whether it is consent gated and records the first open if it has never been recorded. Registering
+    /// waits for a grant, or on a site that is not gated for ``endGrace()``.
     nonisolated func launch() {
         enqueue {
-            await self.values.launched()
+            await self.askTheSite()
             await self.run(nil)
         }
     }
@@ -214,21 +261,79 @@ actor TraceClient {
         let event = Event(type: name.lowercased() == "purchase" ? .purchase : .custom, anonUserKey: "",
                           consentStatus: .unknown, appVersion: Self.appVersion, eventName: name, value: value,
                           metadata: metadata.isEmpty ? nil : metadata)
+        let values = values
         enqueue {
-            await self.values.conversionRecorded(value: value)
+            await self.tellApple { await values.conversionRecorded(value: value) }
             await self.run(.conversion(event))
         }
     }
 
     nonisolated func setConversionValue(fine: Int, coarse: CoarseValue) {
-        enqueue { await self.values.set(fine: fine, coarse: coarse) }
+        let values = values
+        enqueue { await self.tellApple { await values.set(fine: fine, coarse: coarse) } }
     }
 
     nonisolated var installId: String? { InstallId.peek(in: directory) }
 
-    /// Waits until everything called so far has run.
+    /// Waits until everything called so far has run, including what that work queued behind it.
     func idle() async {
-        await tail.withLock { $0 }?.value
+        while let last = tail.withLock({ $0 }) {
+            await last.value
+            if tail.withLock({ $0 }) == last { return }
+        }
+    }
+
+    /// Ends the grace period: behind every call made so far, a site that is not gated may register unless the person
+    /// refused. The launch is queued first, so the site's answer is in by then however long the network took.
+    nonisolated func endGrace() {
+        enqueue { await self.graceIsOver() }
+    }
+
+    private func graceIsOver() async {
+        graceEnded = true
+        await tellAppleIfAllowed()
+    }
+
+    // The site's answer is kept only when it is "not gated", so a gated site writes nothing before consent.
+    private func askTheSite() async {
+        if let answer = await sender.consentGated() {
+            gated = answer
+            if answer {
+                Storage.remove(Self.notGatedFlag, in: directory)
+            } else if !Storage.flagIsSet(Self.notGatedFlag, in: directory) {
+                Storage.setFlag(Self.notGatedFlag, in: directory, log: log)
+            }
+        }
+    }
+
+    // Nothing for someone who refused, and nothing kept for later.
+    private func tellApple(_ update: @escaping @Sendable () async -> Void) async {
+        guard consent != false else { return }
+        forApple.append(update)
+        if forApple.count > ConsentGate.maxHeld { forApple.removeFirst() }
+        await tellAppleIfAllowed()
+    }
+
+    private func tellAppleIfAllowed() async {
+        guard consent == true || (consent == nil && graceEnded && !gated) else { return }
+        if !toldApple {
+            toldApple = true
+            await values.launched()
+        }
+        let updates = forApple
+        forApple = []
+        for update in updates { await update() }
+    }
+
+    private func answered(analytics: Bool) async {
+        consent = analytics
+        if analytics {
+            await tellAppleIfAllowed()
+        } else {
+            forApple = []
+            toldApple = false
+            values.forget()
+        }
     }
 
     private nonisolated func enqueue(_ work: @escaping @Sendable () async -> Void) {
@@ -250,6 +355,7 @@ actor TraceClient {
             switch first {
             case .consent(let analytics, let marketing):
                 guard await gate.setConsent(analytics: analytics, marketing: marketing) else { return stillWaiting() }
+                await answered(analytics: analytics)
             case .conversion(let event):
                 await gate.record(event)
             }

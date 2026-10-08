@@ -13,9 +13,10 @@ import Foundation
 /// `analytics` is the answer that gates events. `marketing` is passed on to the server for the record and never
 /// decides whether an event is sent, so marketing alone discards the queue like any other refusal.
 ///
-/// **Nothing is written to the device before consent.** Decided 6 October 2026, before the first release. The held
+/// **Nothing is written to the device before an answer.** Decided 6 October 2026, before the first release. The held
 /// events live in memory only, the install id is minted and written by the grant, and the first open flag is written
-/// when the first open is sent. A refusal writes nothing. The cost is accepted: an app killed with its banner still
+/// when the first open is sent. A refusal writes no identifier, only ``answerReportedFlag`` once the server has
+/// counted it. The cost is accepted: an app killed with its banner still
 /// on screen loses what was held, and its next launch, finding no first open flag, records a first open again. At
 /// most 100 events are held; past that the oldest goes, because the newest conversions are the ones still worth
 /// sending.
@@ -32,6 +33,18 @@ import Foundation
 actor ConsentGate {
 
     static let maxHeld = 100
+
+    /// An empty file: this install's first consent answer has reached Trace, so every later consent call is a repeat
+    /// and the share who said yes counts it once. Written only once the server has taken an answer, a grant or a
+    /// refusal, never before one, and it holds nothing. 0.2.0 kept this in the conversion value record, which a
+    /// refusal now removes.
+    static let answerReportedFlag = "answer_reported"
+
+    /// Whether the server has taken this install's first answer: the flag, or a record 0.2.0 wrote. Nil when that
+    /// record cannot be read yet, before the first unlock after a reboot.
+    static func answerReported(in directory: URL) -> Bool? {
+        Storage.flagIsSet(answerReportedFlag, in: directory) ? true : ConversionValues.answerReported(in: directory)
+    }
 
     /// `unknown` until ``setConsent(analytics:marketing:)`` is called.
     private(set) var state: ConsentState = .unknown
@@ -69,7 +82,7 @@ actor ConsentGate {
     /// install already has an id. It reads the id with `peek`, never `get`: minting one to report a refusal would
     /// create the identifier the person has just declined.
     ///
-    /// Nothing is held when this returns, flushed or discarded, and a refusal writes nothing. A send the server did
+    /// Nothing is held when this returns, flushed or discarded, and a refusal writes no identifier. A send the server did
     /// not take is not kept: the transport has already retried what was worth retrying.
     ///
     /// **Returns false, having changed nothing, when the install id exists and cannot be read**, which on iOS is the
@@ -109,7 +122,7 @@ actor ConsentGate {
         // Read before the grant can mint an id: a grant is the install's first answer only if it mints the id and no
         // answer has been reported before (a refusal, or a grant the server took).
         let minting = InstallId.read(in: directory) == .absent
-        let reported = ConversionValues.answerReported(in: directory)
+        let reported = Self.answerReported(in: directory)
         if analytics {
             key = InstallId.get(in: directory)
             if key == nil {
@@ -132,14 +145,14 @@ actor ConsentGate {
         if let key {
             let first = analytics && minting && reported == false
             if await sender.sendConsent(key: key, analytics: analytics, marketing: marketing, firstAnswer: first), first {
-                ConversionValues.recordAnswerReported(in: directory, log: log)
+                Storage.setFlag(Self.answerReportedFlag, in: directory, log: log)
             }
         } else if reported == false {
-            // Counted, never identified: the call carries no key, and what remembers it is the Apple record, which
-            // holds no identifier either. Not taken, it is tried again on the next launch.
+            // Counted, never identified: the call carries no key, and what remembers it is an empty flag written
+            // after the answer, like the website banner's `declined`. Not taken, it is tried again on the next launch.
             log.log("consent refused before this install had an identity, reporting the answer with no identifier")
             if await sender.sendFirstRefusal(marketing: marketing) {
-                ConversionValues.recordAnswerReported(in: directory, log: log)
+                Storage.setFlag(Self.answerReportedFlag, in: directory, log: log)
             }
         } else {
             log.log("consent refused before this install had an identity, and the answer was reported before")

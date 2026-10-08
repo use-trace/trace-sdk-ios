@@ -30,6 +30,10 @@ protocol EventSender: Sendable {
     /// identifier of any kind: `consent_analytics` false, the marketing answer, the time, the platform, and
     /// `first_answer` true. Returns whether the server took it. Never throws.
     func sendFirstRefusal(marketing: Bool) async -> Bool
+
+    /// Whether the site is consent gated (UK and EU, or no region set), from the site's config, or nil when there is
+    /// no answer. Decides whether Apple may hear anything before consent. Never throws.
+    func consentGated() async -> Bool?
 }
 
 /// The only thing in this SDK that touches the network, through `URLSession` and nothing else.
@@ -106,6 +110,28 @@ struct Transport: EventSender {
 
     func sendFirstRefusal(marketing: Bool) async -> Bool {
         await postConsent(["consent_analytics": false, "consent_marketing": marketing, "first_answer": true])
+    }
+
+    /// `GET /v1/snippet-config?key=`, which tells the website tag the same thing. Asked once and never retried: no
+    /// answer reads as gated, which only makes Apple wait for consent. The key is the site's public tracking key, as
+    /// in the tag's own request, and names a site rather than anybody.
+    func consentGated() async -> Bool? {
+        var parts = URLComponents(string: baseURL + "/v1/snippet-config")
+        parts?.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        guard let url = parts?.url, ["http", "https"].contains(url.scheme?.lowercased()), url.host?.isEmpty == false else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        guard let (data, response) = try? await session.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let answer = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let gated = answer["consent_gated"] as? Bool
+        else {
+            log.log("the site's consent rule could not be read, so it is treated as consent gated")
+            return nil
+        }
+        return gated
     }
 
     // The share of people who said yes is worked out per platform, counting each install's answer once by
