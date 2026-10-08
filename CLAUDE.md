@@ -24,8 +24,9 @@ approved it. Add `hold` to keep a pull request back.
 
 - **No install referrer exists on iOS.** A first open always reaches Trace as direct, and that is correct. The
   campaign comes from Apple's postback, separately, a day or more later, at campaign level, with no identity.
-- **Apple sends no postback unless the app updates its conversion value at least once.** Registering the install on
-  first launch is the most important thing this SDK does.
+- **Apple sends no postback unless the app updates its conversion value at least once**, within 60 days of the
+  install. Registering the install is the most important thing this SDK does, and on a consent gated site it waits
+  for a yes, so Apple reports only the people who said yes there.
 
 ## Not negotiable
 
@@ -38,21 +39,26 @@ approved it. Add `hold` to keep a pull request back.
   Before an answer the first open and every conversion are held in memory only and no install id exists. A grant
   writes `install_id`, and `first_open_sent` once the first open has been sent. A refusal writes no identifier and
   sends no identifier: with no install id it is reported once, anonymously, with `first_answer` true, so the server
-  can count each install's answer once (README, "Counting each answer once"). The
+  can count each install's answer once (README, "Counting each answer once"). That it was counted is an empty
+  `answer_reported` file, written after the server took the answer, never before one. The
   consent answer is not stored at all: the host app keeps it and passes it on every launch. A process killed before
   an answer loses what was held, and the next launch records a first open again; that cost was accepted.
-- **The two Apple files are the exception, stored before consent.** Registering with Apple happens at first launch
-  whatever the consent state (decided 6 October 2026), because Apple's postbacks carry no device or user identifier
-  and only arrive if the app registered. `install_registered` is an empty file, written as soon as Apple takes the
-  registration, so a later launch does not register again and reset the value. `conversion_value` is the conversion
-  value schema's record (first launch time, window, whether it converted, its revenue, whether the host app owns the
-  value, whether the first consent answer has reached Trace), never sent anywhere. It replaced 0.1.0's empty
-  `conversion_value_raised`. Nothing identifying is ever
-  written before consent, and nothing else is written before it at all.
-- **The conversion value is set from everyone's conversions**, including people who said no and people who never
-  answered (decided 7 October 2026, decision 2 of `docs/plans/APP_MODELLED_INSTALLS.md` in `use-trace/trace`). It is
-  an open legal question for the adviser. If the adviser says a refusal must stop it, the answer is to set it only
-  after a yes (option c there), never to stop it on a no alone (option b), which would bias every campaign quietly.
+- **Apple hears nothing before consent on a consent gated site** (the legal adviser's answer, decided by Dom on
+  8 October 2026, replacing the pre consent exception of 6 and 7 October). Registering with SKAdNetwork and
+  AdAttributionKit and writing the two Apple files are storage on the device under PECR regulation 6 and ePrivacy
+  article 5(3), whatever they hold, and no exemption applies. The SDK follows the site's region like the website tag:
+  it asks `GET /v1/snippet-config?key=` for `consent_gated` at launch, keeps only a "not gated" answer
+  (`site_not_consent_gated`), and treats no answer as gated. Gated (UK and EU, or no region): registration, both
+  files and every value update wait for a grant. Not gated (US, Other): they run from first launch unless the person
+  refused, and the decision waits behind the answer the app passes at launch, so a stored refusal comes first.
+  `install_registered` is an empty file so a later launch does not register again and reset the value;
+  `conversion_value` is the schema's record (registration time, window, whether it converted, its revenue, whether
+  the host app owns the value), never sent anywhere.
+- **A conversion value is set only for someone who has not said no, and on a gated site only after a yes.** A refusal
+  or a withdrawal stops every update and removes both Apple files, in every region; a later grant registers again.
+  Conversions made before a grant in the same launch are applied when it comes; nothing made while the answer is no
+  is kept. Do not set a value from anyone who refused, and do not write either Apple file before a grant on a gated
+  site.
 
 ## The conversion value schema
 

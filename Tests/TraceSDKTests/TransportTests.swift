@@ -191,6 +191,30 @@ struct TransportTests {
         #expect(request.json["platform"] as? String == "ios")
     }
 
+    // The site's region decides whether Apple may hear anything before consent, as GET /v1/snippet-config tells the
+    // website tag. Anything but a 200 with a boolean `consent_gated` is no answer, which the SDK reads as gated.
+    @Test(arguments: [
+        (Reply.body(200, #"{"banner":null,"consent_gated":true}"#), true),
+        (Reply.body(200, #"{"banner":null,"consent_gated":false}"#), false),
+        (Reply.body(200, #"{"banner":null}"#), nil),
+        (Reply.body(200, #"{"consent_gated":"false"}"#), nil),
+        (Reply.body(200, "<!DOCTYPE html><html></html>"), nil),
+        (Reply.body(401, #"{"consent_gated":false}"#), nil),
+        (Reply.status(500), nil),
+        (Reply.networkFailure, nil),
+    ] as [(Reply, Bool?)])
+    func theSitesConsentRuleIsReadFromItsConfig(reply: Reply, gated: Bool?) async throws {
+        let server = StubServer { _, _ in reply }
+        #expect(await transport(server).consentGated() == gated)
+        let request = try #require(server.requests.first)
+        #expect(server.requests.count == 1, "asked once, never retried: the answer only decides what waits")
+        #expect(request.request.httpMethod == "GET")
+        #expect(request.path == "/v1/snippet-config")
+        #expect(request.request.url?.query == "key=tk_placeholder")
+        #expect(request.header("User-Agent") == Transport.userAgent)
+        #expect(request.body.isEmpty)
+    }
+
     // Row 3: the server takes the key for a replayed event from the consent call, so the consent call carries it.
     @Test func theInstallIdIsOnEveryEventAndOnTheConsentCall() async {
         let server = StubServer()

@@ -78,14 +78,12 @@ enum ConversionValueSchema {
 /// first launches the app, to register the installation. Without it the campaign behind an install never reaches
 /// Trace, because there is no install referrer on iOS and the postback is the only source.
 ///
-/// **It does not need Trace consent, and it does not wait for it.** It sends nothing to Trace and no identity to
-/// anyone. It tells Apple's own privacy preserving attribution system, on the device, what happened; Apple then
-/// decides on its own terms whether, when and how coarsely to report it, at campaign level, with no identifier for
-/// the person. The value is set from everyone's conversions, including people who said no and people who never
-/// answered (decided 7 October 2026, decision 2 of `APP_MODELLED_INSTALLS.md`, recorded as an open legal question):
-/// it is what lets a campaign's revenue be estimated for the people Trace cannot follow.
+/// **Whether it runs at all is ``TraceClient``'s decision.** The legal adviser's answer, decided by Dom on 8 October
+/// 2026: registering and the two files are storage on the device, so on a consent gated site they wait for a grant,
+/// and a conversion value is set only for someone who said yes. On a US or Other site they run from first launch
+/// unless the person refused. A refusal removes both files (``forget()``). Nothing about consent reaches this type.
 ///
-/// **Two files, written whatever the consent state, neither an identifier.** `install_registered` is an empty file,
+/// **Two files, neither an identifier.** `install_registered` is an empty file,
 /// and only its existence is read, so it works even before the phone's first unlock after a reboot, when a
 /// protected file's contents cannot be read; it stops a later launch registering again and resetting the value.
 /// `conversion_value` is the schema's record: when the install first launched, the window it is in, whether that
@@ -116,26 +114,17 @@ struct ConversionValues: Sendable {
         var revenue = 0.0
         /// The host app called `setConversionValue`, and from then on the value is the app's.
         var setByApp = false
-        /// The server has taken this install's first consent answer, so every later consent call is a repeat. Kept
-        /// here, not in a file of its own, so that nothing more is written before consent.
+        /// 0.2.0 only: the server had taken this install's first consent answer. 0.3.0 keeps that in
+        /// ``ConsentGate/answerReportedFlag`` and only reads this, so an install that answered under 0.2.0 is not
+        /// counted twice.
         var answerReported = false
     }
 
-    /// Whether the server has taken this install's first consent answer. False with no record yet, nil when the
-    /// record cannot be read, which is the phone before its first unlock after a reboot.
+    /// What a 0.2.0 record says about the first answer. False with no record, nil when the record cannot be read,
+    /// which is the phone before its first unlock after a reboot.
     static func answerReported(in directory: URL) -> Bool? {
         guard FileManager.default.fileExists(atPath: directory.appending(path: stateFile).path) else { return false }
         return read(in: directory, log: .silent)?.answerReported
-    }
-
-    /// Records that the server took the first answer. With no record yet (an install 0.1.0 registered, or one whose
-    /// registration has not succeeded), one is started with a first launch of 0, long ago, which the schema leaves
-    /// alone; a registration that succeeds later starts the schema and keeps this.
-    static func recordAnswerReported(in directory: URL, log: TraceLog) {
-        let exists = FileManager.default.fileExists(atPath: directory.appending(path: stateFile).path)
-        guard var record = exists ? read(in: directory, log: log) : Record(firstLaunch: 0) else { return }
-        record.answerReported = true
-        save(record, in: directory, log: log)
     }
 
     private let directory: URL
@@ -157,9 +146,8 @@ struct ConversionValues: Sendable {
         if !Storage.flagIsSet(Self.registeredFlag, in: directory) {
             if await update(fine: 0, coarse: .low, reason: "registering the install") {
                 Storage.setFlag(Self.registeredFlag, in: directory, log: log)
-                var record = Record(firstLaunch: now().timeIntervalSince1970)
-                record.answerReported = Self.answerReported(in: directory) ?? false
-                save(record)
+                keepTheReportedAnswer()
+                save(Record(firstLaunch: now().timeIntervalSince1970))
             }
             return
         }
@@ -178,6 +166,21 @@ struct ConversionValues: Sendable {
         let fine = record.window == 0 ? ConversionValueSchema.fine(converted: true, revenue: record.revenue) : 0
         await update(fine: fine, coarse: ConversionValueSchema.coarse(converted: true, revenue: record.revenue),
                      reason: "a conversion in window \(record.window + 1)")
+    }
+
+    /// After a refusal or a withdrawal: removes the registration flag and the record, so nothing more is set, and a
+    /// later grant registers the install again. A 0.2.0 record's reported answer moves to its flag first.
+    func forget() {
+        keepTheReportedAnswer()
+        Storage.remove(Self.registeredFlag, in: directory)
+        Storage.remove(Self.stateFile, in: directory)
+    }
+
+    // Before a 0.2.0 record is replaced or removed, its reported answer moves to the flag 0.3.0 keeps it in.
+    private func keepTheReportedAnswer() {
+        if Self.answerReported(in: directory) == true {
+            Storage.setFlag(ConsentGate.answerReportedFlag, in: directory, log: log)
+        }
     }
 
     /// The host app's own value, for its own schema. A fine value outside 0 to 63 is refused with a log line rather

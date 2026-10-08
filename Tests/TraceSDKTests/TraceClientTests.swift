@@ -112,8 +112,8 @@ struct TraceClientTests {
         await client.idle()
 
         #expect(sender.calls.isEmpty, "nothing may be sent while the install id cannot be read")
-        #expect(try written() == [ConversionValues.registeredFlag, ConversionValues.stateFile, InstallId.fileName].sorted(),
-                "no new id, no first open flag and no held queue may be written; the Apple files do not wait")
+        #expect(try written() == [InstallId.fileName],
+                "no new id, no first open flag, no held queue and, with the grant still waiting, no Apple file")
 
         // The phone is unlocked. The next call runs what waited, in the order it was called, under the first id.
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
@@ -132,21 +132,10 @@ struct TraceClientTests {
         #expect(sender.events.allSatisfy { $0.consentStatus == .granted })
     }
 
-    // Registering with Apple sends nothing to Trace and no identity anywhere, so it does not wait for consent.
-    @Test func theInstallIsRegisteredWithAppleWhateverTheConsentAnswer() async {
-        let registrar = FakeRegistrar()
-        let sender = RecordingSender()
-
-        await launch(sender, registrar) { $0.setConsent(analytics: false, marketing: false) }
-
-        #expect(registrar.updates == ["0 low"])
-        #expect(sender.events.isEmpty)
-    }
-
     @Test func aConversionSetsTheValueFromItsRevenueAndAHostValueIsPassedOn() async {
         let registrar = FakeRegistrar()
 
-        await launch(RecordingSender(), registrar) {
+        await launch(RecordingSender(gated: false), registrar) {
             $0.conversion("purchase", value: 4.99, metadata: [:])
             $0.setConversionValue(fine: 12, coarse: .high)
         }
@@ -154,21 +143,117 @@ struct TraceClientTests {
         #expect(registrar.updates == ["0 low", "16 high", "12 high"])
     }
 
-    // Decided 7 October 2026 (decision 2 of APP_MODELLED_INSTALLS.md in use-trace/trace): the value is set from the
-    // conversions of everyone, including people who said no and people who never answered, as Apple designed it.
-    // It travels only inside Apple's signed postback, with no identifier. Nothing reaches Trace.
-    @Test(arguments: [false, nil] as [Bool?])
-    func aConversionSetsTheValueWhateverTheConsentAnswer(answer: Bool?) async {
-        let registrar = FakeRegistrar()
-        let sender = RecordingSender()
+    // The legal adviser's answers, decided by Dom on 8 October 2026. Registering with Apple and its two files are
+    // storage on the device and need consent where consent is required (PECR regulation 6, ePrivacy article 5(3)), and
+    // a conversion value is set only for someone who said yes. Like the website tag, the SDK follows the site's region:
+    // on a consent gated site (UK and EU, or no region) nothing is told to Apple and nothing is written before a grant;
+    // on a US or Other site the install is registered at first launch and values are set unless the person refused.
+    // Unknown, as when the site cannot be asked, is gated.
 
-        await launch(sender, registrar) {
-            if let answer { $0.setConsent(analytics: answer, marketing: answer) }
-            $0.conversion("purchase", value: 4.99, metadata: [:])
+    /// The Apple files and the site rule, the files these tests are about.
+    private func appleFiles() throws -> [String] {
+        try written().filter { [ConversionValues.registeredFlag, ConversionValues.stateFile].contains($0) }
+    }
+
+    @Test(arguments: [true, nil] as [Bool?])
+    func onAGatedSiteOrOneThatCannotBeAskedNothingIsToldToAppleOrWrittenBeforeAnAnswer(gated: Bool?) async throws {
+        let registrar = FakeRegistrar()
+
+        await launch(RecordingSender(gated: gated), registrar) {
+            $0.conversion("purchase", value: 9.99, metadata: [:])
+            $0.setConversionValue(fine: 12, coarse: .high)
         }
 
+        #expect(registrar.updates.isEmpty, "no registration and no value before consent on a gated site")
+        #expect(try written().isEmpty, "nothing at all may be written before consent on a gated site")
+    }
+
+    @Test func onAGatedSiteAGrantRegistersWritesTheFilesAndSetsTheValueFromWhatWasHeld() async throws {
+        let registrar = FakeRegistrar()
+
+        await launch(RecordingSender(gated: true), registrar) {
+            $0.conversion("purchase", value: 4.99, metadata: [:])
+            $0.setConsent(analytics: true, marketing: false)
+            $0.conversion("signup", value: nil, metadata: [:])
+        }
+
+        #expect(registrar.updates == ["0 low", "16 high", "16 high"])
+        #expect(try appleFiles() == [ConversionValues.registeredFlag, ConversionValues.stateFile].sorted())
+    }
+
+    @Test func onASiteThatIsNotGatedTheInstallIsRegisteredAndValuesSetBeforeAnAnswer() async throws {
+        let registrar = FakeRegistrar()
+
+        await launch(RecordingSender(gated: false), registrar) { $0.conversion("purchase", value: 4.99, metadata: [:]) }
+
         #expect(registrar.updates == ["0 low", "16 high"])
-        #expect(sender.events.isEmpty)
+        #expect(try written() == [ConversionValues.registeredFlag, ConversionValues.stateFile, TraceClient.notGatedFlag].sorted(),
+                "the Apple files and the site's answer, and no identifier")
+    }
+
+    // A refusal, or a withdrawal after a grant, stops every update and removes the two files, in either region.
+    @Test(arguments: [true, false])
+    func aRefusalStopsTheValueAndRemovesTheAppleFiles(gated: Bool) async throws {
+        let registrar = FakeRegistrar()
+
+        await launch(RecordingSender(gated: gated), registrar) {
+            $0.setConsent(analytics: true, marketing: false)
+            $0.conversion("signup", value: 1, metadata: [:])
+            $0.setConsent(analytics: false, marketing: false)
+            $0.conversion("purchase", value: 9.99, metadata: [:])
+            $0.setConversionValue(fine: 12, coarse: .high)
+        }
+
+        #expect(registrar.updates == ["0 low", "3 medium"], "nothing may be set after the refusal")
+        #expect(try appleFiles().isEmpty)
+
+        let later = FakeRegistrar()
+        await launch(RecordingSender(gated: gated), later) {
+            $0.setConsent(analytics: false, marketing: false)
+            $0.conversion("purchase", value: 9.99, metadata: [:])
+        }
+        #expect(later.updates.isEmpty, "a refusal passed at the next launch keeps it that way")
+        #expect(try appleFiles().isEmpty)
+    }
+
+    // On a site that is not gated the app passes its stored refusal straight after initialise, and that has to win:
+    // registering first and removing the files a moment later would still be an update for someone who said no.
+    @Test func onASiteThatIsNotGatedARefusalPassedAtLaunchComesBeforeRegistering() async throws {
+        let registrar = FakeRegistrar()
+
+        await launch(RecordingSender(gated: false), registrar) { $0.setConsent(analytics: false, marketing: false) }
+
+        #expect(registrar.updates.isEmpty)
+        #expect(try appleFiles().isEmpty)
+    }
+
+    // A conversion made while the answer was no is not kept for a later yes: Trace drops it, and so does Apple.
+    @Test func aGrantAfterARefusalRegistersThenAndSetsNothingFromWhileItWasNo() async throws {
+        await launch(RecordingSender(gated: true)) { $0.setConsent(analytics: false, marketing: false) }
+
+        let registrar = FakeRegistrar()
+        await launch(RecordingSender(gated: true), registrar) {
+            $0.setConsent(analytics: false, marketing: false)
+            $0.conversion("purchase", value: 9.99, metadata: [:])
+            $0.setConsent(analytics: true, marketing: false)
+        }
+
+        #expect(registrar.updates == ["0 low"])
+        #expect(try appleFiles() == [ConversionValues.registeredFlag, ConversionValues.stateFile].sorted())
+    }
+
+    // The site's last answer is kept, so a launch that cannot ask still follows it. Only "not gated" is written: a
+    // gated site writes nothing before consent, and no answer kept reads as gated.
+    @Test func theSitesLastAnswerIsKeptOnlyWhenItIsNotGated() async throws {
+        await launch(RecordingSender(gated: false)) { $0.setConsent(analytics: false, marketing: false) }
+        #expect(try written().contains(TraceClient.notGatedFlag))
+
+        let offline = FakeRegistrar()
+        await launch(RecordingSender(gated: nil), offline)
+        #expect(offline.updates == ["0 low"], "offline, the last answer, not gated, still holds")
+
+        await launch(RecordingSender(gated: true))
+        #expect(try !written().contains(TraceClient.notGatedFlag), "a gated answer removes the kept one")
     }
 
     @Test func aPurchaseIsSentAsThePurchaseTypeWithItsValueAndAnythingElseAsCustom() async {
@@ -202,26 +287,25 @@ struct TraceClientTests {
 
     // Decided 6 October 2026, before the first release: no identifier is stored before consent. The first open waits
     // in memory only; the id and the install are written the moment the person accepts, and a refusal never writes
-    // an identifier. The one exception is what the SDK has told Apple: the registration flag, decided the same day,
-    // and the conversion value schema's record, decided on 7 October 2026. Neither holds an identifier. These are
-    // those decisions as tests, over the directory the SDK writes to.
+    // an identifier. Since 8 October 2026 nothing at all is written before consent on a gated site, the Apple files
+    // included (above). These are those decisions as tests, over the directory the SDK writes to.
 
     /// Every file the SDK has written to its directory.
     private func written() throws -> [String] {
         try FileManager.default.contentsOfDirectory(atPath: directory.path).sorted()
     }
 
-    /// The two files allowed before an answer, both about what the SDK has told Apple and neither an identifier.
+    /// The two files about what the SDK has told Apple, neither an identifier.
     private let appleFlags = [ConversionValues.registeredFlag, ConversionValues.stateFile].sorted()
 
-    @Test func aFreshInstallThatNeverAnswersWritesTheTwoAppleFilesAndNothingElse() async throws {
-        let sender = RecordingSender()
+    @Test func aFreshInstallThatNeverAnswersOnASiteThatIsNotGatedWritesTheAppleFilesAndNoIdentifier() async throws {
+        let sender = RecordingSender(gated: false)
         let registrar = FakeRegistrar()
 
         await launch(sender, registrar) { $0.conversion("purchase", value: 9.99, metadata: [:]) }
 
-        #expect(try written() == appleFlags,
-                "before an answer only the Apple flags may be written: no install id, no first open flag, no queue")
+        #expect(try written() == (appleFlags + [TraceClient.notGatedFlag]).sorted(),
+                "before an answer no install id, no first open flag and no queue may be written")
         #expect(sender.calls.isEmpty)
         #expect(InstallId.peek(in: directory) == nil)
         #expect(registrar.updates == ["0 low", "22 high"])
@@ -230,13 +314,13 @@ struct TraceClientTests {
     // The files are on disk so this cannot happen: a second launch registering again would reset the value to fine 0,
     // coarse low, undoing the conversion's medium or a value the host app set for its own schema.
     @Test func aSecondLaunchWithoutAnAnswerDoesNotRegisterWithAppleAgain() async throws {
-        await launch(RecordingSender()) { $0.setConversionValue(fine: 42, coarse: .high) }
+        await launch(RecordingSender(gated: false)) { $0.setConversionValue(fine: 42, coarse: .high) }
 
         let registrar = FakeRegistrar()
-        await launch(RecordingSender(), registrar) { $0.conversion("signup", value: nil, metadata: [:]) }
+        await launch(RecordingSender(gated: false), registrar) { $0.conversion("signup", value: nil, metadata: [:]) }
 
         #expect(registrar.updates.isEmpty, "Apple's value must not be reset or lowered by a later launch")
-        #expect(try written() == appleFlags)
+        #expect(try written() == (appleFlags + [TraceClient.notGatedFlag]).sorted())
     }
 
     @Test func aRefusalWritesNoIdentifierAndSendsOnlyTheAnswerWithNoIdentifier() async throws {
@@ -247,7 +331,8 @@ struct TraceClientTests {
             $0.setConsent(analytics: false, marketing: true)
         }
 
-        #expect(try written() == appleFlags, "a refusal may write no identifier, no first open flag and no queue")
+        #expect(try written() == [ConsentGate.answerReportedFlag],
+                "a refusal may write no identifier, no first open flag, no queue and no Apple file; only that it was counted")
         #expect(InstallId.peek(in: directory) == nil)
         #expect(sender.calls == ["first refusal marketing=true"])
         #expect(sender.consentKeys.isEmpty)
@@ -264,7 +349,7 @@ struct TraceClientTests {
 
         let id = try #require(InstallId.peek(in: directory), "the grant should have written the install id")
         #expect(try written() == [TraceClient.firstOpenFlag, InstallId.fileName, ConversionValues.registeredFlag,
-                                  ConversionValues.stateFile].sorted())
+                                  ConversionValues.stateFile, ConsentGate.answerReportedFlag].sorted())
         #expect(sender.calls == [
             "consent analytics=true marketing=false",
             "event FIRST_OPEN",
@@ -296,10 +381,10 @@ struct TraceClientTests {
     @Test func aRestartBeforeAnyAnswerIsAFirstOpenAgain() async throws {
         await launch(RecordingSender()) { $0.conversion("signup", value: nil, metadata: [:]) }
 
-        // The app is killed with its banner still on screen. Only the Apple files were written, so the next launch
-        // knows nothing of this one for Trace: the held conversion is lost, which is the accepted cost, and the
-        // install is new. Apple already has it.
-        #expect(try written() == appleFlags)
+        // The app is killed with its banner still on screen. Nothing was written, so the next launch knows nothing of
+        // this one: the held conversion is lost, which is the accepted cost, and the install is new, to Trace and to
+        // Apple alike.
+        #expect(try written().isEmpty)
 
         let sender = RecordingSender()
         let registrar = FakeRegistrar()
@@ -307,7 +392,7 @@ struct TraceClientTests {
 
         #expect(sender.calls == ["consent analytics=true marketing=false", "event FIRST_OPEN"])
         #expect(sender.events.first?.anonUserKey == InstallId.peek(in: directory))
-        #expect(registrar.updates.isEmpty, "the first launch registered and recorded it, so this one does not")
+        #expect(registrar.updates == ["0 low"], "registered by the grant")
     }
 
     // The server keeps metadata keys of letters, digits and underscores and drops the rest without a word.
