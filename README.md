@@ -41,7 +41,7 @@ targets: [
 ]
 ```
 
-Use `0.1.1` or later. `0.1.0` (6 October 2026) sent events to the dashboard's address instead of the API's, where they were answered and lost; `0.1.1` (7 October 2026) sends them to `https://app.usetrace.io/api-proxy`. `0.2.0` adds Trace's conversion value schema and sends the platform with the consent call. `0.3.0` follows the site's region: on a UK or EU site it registers with Apple and sets Apple's conversion value only after a yes, and on any site a no stops the value and removes the Apple files; see "Before consent, by region". Upgrade a UK or EU app to `0.3.0`.
+Use `0.1.1` or later. `0.1.0` (6 October 2026) sent events to the dashboard's address instead of the API's, where they were answered and lost; `0.1.1` (7 October 2026) sends them to `https://app.usetrace.io/api-proxy`. `0.2.0` adds Trace's conversion value schema and sends the platform with the consent call. `0.3.0` follows the site's region: on a UK or EU site it registers with Apple and sets Apple's conversion value only after a yes, and on any site a no stops the value and removes the Apple files; see "Before consent, by region". Use `0.3.0` or later on a UK or EU app.
 
 ## Initialising
 
