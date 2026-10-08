@@ -49,8 +49,11 @@ approved it. Add `hold` to keep a pull request back.
   article 5(3), whatever they hold, and no exemption applies. The SDK follows the site's region like the website tag:
   it asks `GET /v1/snippet-config?key=` for `consent_gated` at launch, keeps only a "not gated" answer
   (`site_not_consent_gated`), and treats no answer as gated. Gated (UK and EU, or no region): registration, both
-  files and every value update wait for a grant. Not gated (US, Other): they run from first launch unless the person
-  refused, and the decision waits behind the answer the app passes at launch, so a stored refusal comes first.
+  files and every value update wait for a grant. Not gated (US, Other): they run unless the person refused, from the
+  end of a five second grace period after `initialise` (`TraceClient.grace`). Its end is queued behind every call the
+  app made before it, so a refusal passed within it comes first, whatever the network does; never make that ordering
+  depend on how fast a request returns. A refusal after it stops updates and removes the files, and Apple keeps the
+  registration, which an opt out site allows.
   `install_registered` is an empty file so a later launch does not register again and reset the value;
   `conversion_value` is the schema's record (registration time, window, whether it converted, its revenue, whether
   the host app owns the value), never sent anywhere.

@@ -48,8 +48,8 @@ public enum Trace {
     ///
     /// It asks the site, with the api key, whether it is consent gated, as the website tag does. On a gated site, or
     /// when there is no answer and none kept from before, registering with Apple waits for a grant. On a site that is
-    /// not gated it happens at first launch, after any answer the app passes straight after this call, so a refusal
-    /// passed then comes first.
+    /// not gated it happens five seconds after this call, behind every call the app made in that time, so a refusal
+    /// passed within it comes first; a refusal after it stops the value and removes the files.
     public static func initialise(_ config: TraceConfig) {
         #if os(iOS)
         let registrar = StoreKitRegistrar()
@@ -57,7 +57,7 @@ public enum Trace {
         let registrar = NoRegistrar()
         #endif
         initialise(config, directory: Storage.defaultDirectory, session: Transport.defaultSession,
-                   registrar: registrar, log: TraceLog(enabled: config.debugLogging))
+                   registrar: registrar, log: TraceLog(enabled: config.debugLogging), grace: TraceClient.grace)
     }
 
     /// Records what the person answered, which is what lets anything be sent at all.
@@ -119,8 +119,9 @@ public enum Trace {
     }
 
     // The injectable form, so a test can drive the real thing against a stub server and a fake registrar.
+    /// `grace` nil is a grace period that only ends when a test ends it, through ``endGraceForTest()``.
     static func initialise(_ config: TraceConfig, directory: URL, session: URLSession,
-                           registrar: any ConversionValueRegistrar, log: TraceLog) {
+                           registrar: any ConversionValueRegistrar, log: TraceLog, grace: Duration? = TraceClient.grace) {
         if config.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             log.log("Trace.initialise was given a blank api key, so nothing was started")
             return
@@ -137,6 +138,12 @@ public enum Trace {
             return
         }
         started.launch()
+        if let grace {
+            Task {
+                try? await Task.sleep(for: grace)
+                started.endGrace()
+            }
+        }
     }
 
     private static func current(_ method: String) -> TraceClient? {
@@ -145,6 +152,11 @@ public enum Trace {
             return nil
         }
         return current
+    }
+
+    /// Ends the grace period now, behind everything called so far. Tests only.
+    static func endGraceForTest() {
+        client.withLock { $0 }?.endGrace()
     }
 
     /// Waits for everything called so far. Tests only.
@@ -202,8 +214,12 @@ actor TraceClient {
     private var consent: Bool?
     /// The site's rule: this launch's answer from the API, else the last one kept, else gated.
     private var gated: Bool
-    /// Whether this launch has finished asking the site. Until then only a grant lets Apple hear anything.
-    private var siteAsked = false
+    /// On a site that is not gated the SDK registers only once the grace period after ``launch()`` is over, so that
+    /// an answer the app passes during it is applied first, whatever the network does. ``endGrace()`` queues the end
+    /// behind every call made before it; the network answer is filled in by the launch, which is queued first.
+    static let grace: Duration = .seconds(5)
+    /// Whether this launch's grace period is over. Until then only a grant lets Apple hear anything.
+    private var graceEnded = false
     /// Whether this launch has registered with Apple, or found it already registered, with permission.
     private var toldApple = false
     /// Value updates made while Apple may not hear them yet, in order, for a grant to apply. In memory only, bounded
@@ -220,8 +236,8 @@ actor TraceClient {
         gated = !Storage.flagIsSet(Self.notGatedFlag, in: directory)
     }
 
-    /// Asks the site whether it is consent gated, records the first open if it has never been recorded, then, behind
-    /// whatever the app called meanwhile, registers with Apple if that is allowed.
+    /// Asks the site whether it is consent gated and records the first open if it has never been recorded. Registering
+    /// waits for a grant, or on a site that is not gated for ``endGrace()``.
     nonisolated func launch() {
         enqueue {
             await self.askTheSite()
@@ -267,15 +283,19 @@ actor TraceClient {
         }
     }
 
-    // The site's answer is kept only when it is "not gated", so a gated site writes nothing before consent. The
-    // decision's place in the queue is reserved here, before the network request is fired, not after it returns: an
-    // app passes its stored answer straight after initialise, and that call must already be queued ahead of this
-    // reservation, not racing a network round trip to get there first. The network result is filled in once ready;
-    // ``siteWasAsked()`` reads it only once its turn in the queue comes, by which point this function has returned.
+    /// Ends the grace period: behind every call made so far, a site that is not gated may register unless the person
+    /// refused. The launch is queued first, so the site's answer is in by then however long the network took.
+    nonisolated func endGrace() {
+        enqueue { await self.graceIsOver() }
+    }
+
+    private func graceIsOver() async {
+        graceEnded = true
+        await tellAppleIfAllowed()
+    }
+
+    // The site's answer is kept only when it is "not gated", so a gated site writes nothing before consent.
     private func askTheSite() async {
-        enqueue {
-            await self.siteWasAsked()
-        }
         if let answer = await sender.consentGated() {
             gated = answer
             if answer {
@@ -284,11 +304,6 @@ actor TraceClient {
                 Storage.setFlag(Self.notGatedFlag, in: directory, log: log)
             }
         }
-    }
-
-    private func siteWasAsked() async {
-        siteAsked = true
-        await tellAppleIfAllowed()
     }
 
     // Nothing for someone who refused, and nothing kept for later.
@@ -300,7 +315,7 @@ actor TraceClient {
     }
 
     private func tellAppleIfAllowed() async {
-        guard consent == true || (consent == nil && siteAsked && !gated) else { return }
+        guard consent == true || (consent == nil && graceEnded && !gated) else { return }
         if !toldApple {
             toldApple = true
             await values.launched()

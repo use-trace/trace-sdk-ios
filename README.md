@@ -125,11 +125,16 @@ gated".
 | Your site's region | Before the person answers | After a yes | After a no, or a withdrawal |
 | --- | --- | --- | --- |
 | UK and EU, or no region set | Nothing is told to Apple and nothing is written to the device. | The install is registered with Apple, the two Apple files are written, and the value is set from conversions, including any made before the yes in that launch. | Nothing is set, and the two Apple files are removed. |
-| US or Other | The install is registered with Apple at first launch, the two Apple files are written, and the value is set from conversions. | As before the answer. | Nothing more is set, and the two Apple files are removed. |
+| US or Other | Five seconds after `initialise`, the install is registered with Apple, the two Apple files are written, and the value is set from conversions, including any made in those five seconds. | Registered at once, if it was not. | Nothing more is set, and the two Apple files are removed. |
 
 If the SDK cannot ask (no network, an older API) and has no earlier "not gated" answer, it treats the site as consent
-gated. The answer your app passes straight after `initialise` is handled before the SDK registers, so on a US or
-Other site a stored refusal stops the registration rather than undoing it.
+gated.
+
+On a US or Other site the SDK waits five seconds after `initialise` before registering, whatever the network does, and
+applies every call your app made in that time first. So a stored refusal passed within five seconds of `initialise`
+(as in "Initialising" above) stops the registration. A refusal that arrives later comes after the registration: Apple
+keeps that registration, which a US or Other site allows, and from the refusal on nothing more is set and the two
+Apple files are removed. On a UK or EU site nothing is registered before a yes, however late the answer comes.
 
 Registering and setting the value send nothing to Trace and no identity anywhere: they tell Apple's own attribution
 system, on the device, that the app launched and what the person did in it, and Apple then reports the campaign at

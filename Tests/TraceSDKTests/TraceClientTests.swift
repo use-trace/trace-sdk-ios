@@ -13,12 +13,14 @@ struct TraceClientTests {
         TraceClient(directory: directory, sender: sender, registrar: registrar, log: capture.log)
     }
 
-    /// A client launched, with whatever the test then does, run to the end.
+    /// A client launched, with whatever the test then does inside the grace period, then the grace period's end,
+    /// run to the end.
     private func launch(_ sender: RecordingSender, _ registrar: FakeRegistrar = FakeRegistrar(),
                         then work: (TraceClient) -> Void = { _ in }) async {
         let client = client(sender, registrar)
         client.launch()
         work(client)
+        client.endGrace()
         await client.idle()
     }
 
@@ -216,32 +218,63 @@ struct TraceClientTests {
         #expect(try appleFiles().isEmpty)
     }
 
-    // On a site that is not gated the app passes its stored refusal straight after initialise, and that has to win:
-    // registering first and removing the files a moment later would still be an update for someone who said no.
-    @Test func onASiteThatIsNotGatedARefusalPassedAtLaunchComesBeforeRegistering() async throws {
+    // On a site that is not gated the SDK registers once the grace period after launch is over, behind every call made
+    // before it ends, and never earlier, however fast the site answers. A refusal passed within it comes first, so
+    // nothing is registered. One that arrives after it comes too late to stop the registration, which a US or Other
+    // site allows (an opt out), and stops every update and removes the files from then on. Both orders, driven.
+    @Test func onASiteThatIsNotGatedARefusalWithinTheGracePeriodComesBeforeRegistering() async throws {
         let registrar = FakeRegistrar()
+        let client = client(RecordingSender(gated: false), registrar)
 
-        await launch(RecordingSender(gated: false), registrar) { $0.setConsent(analytics: false, marketing: false) }
+        client.launch()
+        client.conversion("purchase", value: 9.99, metadata: [:])
+        await client.idle()
+        #expect(registrar.updates.isEmpty, "nothing is registered or set before the grace period ends")
+        client.setConsent(analytics: false, marketing: false)
+        await client.idle()
+        client.endGrace()
+        await client.idle()
 
         #expect(registrar.updates.isEmpty)
         #expect(try appleFiles().isEmpty)
     }
 
-    // The same ordering, with the site answering instantly rather than after the network delay the other test gives
-    // it: this is what actually proves the refusal's place in the queue is reserved before the request is fired,
-    // rather than won by outrunning it.
-    @Test func onASiteThatIsNotGatedARefusalPassedAtLaunchComesBeforeRegisteringEvenWithNoNetworkDelay() async throws {
+    @Test func onASiteThatIsNotGatedARefusalAfterTheGracePeriodRemovesWhatWasRegistered() async throws {
         let registrar = FakeRegistrar()
+        let client = client(RecordingSender(gated: false), registrar)
 
-        await launch(RecordingSender(gatedDelay: .zero, gated: false), registrar) {
-            $0.setConsent(analytics: false, marketing: false)
-        }
+        client.launch()
+        await client.idle()
+        #expect(registrar.updates.isEmpty, "the site's answer alone registers nothing")
+        client.endGrace()
+        await client.idle()
+        #expect(registrar.updates == ["0 low"])
+        client.setConsent(analytics: false, marketing: false)
+        client.conversion("purchase", value: 9.99, metadata: [:])
+        await client.idle()
 
-        #expect(registrar.updates.isEmpty)
+        #expect(registrar.updates == ["0 low"], "nothing set after the refusal")
         #expect(try appleFiles().isEmpty)
     }
 
-    // A conversion made while the answer was no is not kept for a later yes: Trace drops it, and so does Apple.
+    // On a gated site the grace period changes nothing: only a yes registers.
+    @Test func onAGatedSiteTheEndOfTheGracePeriodRegistersNothing() async throws {
+        let registrar = FakeRegistrar()
+        let client = client(RecordingSender(gated: true), registrar)
+
+        client.launch()
+        client.endGrace()
+        client.conversion("purchase", value: 9.99, metadata: [:])
+        await client.idle()
+
+        #expect(registrar.updates.isEmpty)
+        #expect(try written().isEmpty)
+    }
+
+    @Test func theGracePeriodIsFiveSeconds() {
+        #expect(TraceClient.grace == .seconds(5))
+    }
+
     @Test func aGrantAfterARefusalRegistersThenAndSetsNothingFromWhileItWasNo() async throws {
         await launch(RecordingSender(gated: true)) { $0.setConsent(analytics: false, marketing: false) }
 

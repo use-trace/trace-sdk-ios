@@ -17,7 +17,7 @@ struct TraceEndToEndTests {
         let registrar = FakeRegistrar()
 
         Trace.initialise(TraceConfig(apiKey: "tk_placeholder", apiURL: server.url.absoluteString),
-                         directory: directory, session: server.session, registrar: registrar, log: capture.log)
+                         directory: directory, session: server.session, registrar: registrar, log: capture.log, grace: nil)
         Trace.conversion("purchase", value: 29.99, metadata: ["plan": "plus"])
         Trace.setConsent(analytics: true, marketing: false)
         await Trace.idleForTest()
@@ -59,7 +59,7 @@ struct TraceEndToEndTests {
         let server = StubServer()
 
         Trace.initialise(TraceConfig(apiKey: " "), directory: directory, session: server.session,
-                         registrar: FakeRegistrar(), log: capture.log)
+                         registrar: FakeRegistrar(), log: capture.log, grace: nil)
         Trace.setConsent(analytics: true, marketing: false)
         await Trace.resetForTest()
 

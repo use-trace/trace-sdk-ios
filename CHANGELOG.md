@@ -9,8 +9,9 @@ Each release is also a GitHub release, with its pull request's description as th
   A yes registers the install and sets the value, including from conversions made earlier in that launch.
 - Apple's conversion value is never set for someone who said no. A refusal or a withdrawal stops it and removes both
   Apple files, in every region. A later yes registers the install again.
-- On a US or Other site the install is still registered at first launch, unless the answer the app passes at launch
-  is a no.
+- On a US or Other site the install is registered five seconds after `initialise`, after every call the app made in
+  that time, so a stored refusal passed within those five seconds stops it. A refusal that arrives later stops the
+  value and removes the files, but Apple keeps the registration, which a US or Other site allows.
 - The SDK asks Trace at launch whether the site is consent gated (`GET /v1/snippet-config`), as the website tag does,
   and keeps the answer only when it is "not gated" (`site_not_consent_gated`). No answer reads as gated.
 - That Trace has counted the install's first consent answer is kept in an empty `answer_reported` file, written after
