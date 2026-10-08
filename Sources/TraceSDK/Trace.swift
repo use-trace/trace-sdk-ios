@@ -268,9 +268,14 @@ actor TraceClient {
     }
 
     // The site's answer is kept only when it is "not gated", so a gated site writes nothing before consent. The
-    // decision waits behind the calls made so far: an app passes its stored answer straight after initialise, and a
-    // refusal there must come before registering, not undo it a moment later.
+    // decision's place in the queue is reserved here, before the network request is fired, not after it returns: an
+    // app passes its stored answer straight after initialise, and that call must already be queued ahead of this
+    // reservation, not racing a network round trip to get there first. The network result is filled in once ready;
+    // ``siteWasAsked()`` reads it only once its turn in the queue comes, by which point this function has returned.
     private func askTheSite() async {
+        enqueue {
+            await self.siteWasAsked()
+        }
         if let answer = await sender.consentGated() {
             gated = answer
             if answer {
@@ -278,9 +283,6 @@ actor TraceClient {
             } else if !Storage.flagIsSet(Self.notGatedFlag, in: directory) {
                 Storage.setFlag(Self.notGatedFlag, in: directory, log: log)
             }
-        }
-        enqueue {
-            await self.siteWasAsked()
         }
     }
 

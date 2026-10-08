@@ -16,14 +16,19 @@ final class RecordingSender: EventSender {
 
     private let recorded = OSAllocatedUnfairLock(initialState: Recorded())
     private let consentDelay: Duration
+    private let gatedDelay: Duration
     private let refusalTaken: Bool
     private let gated: Bool?
 
     /// `consentDelay` holds the consent call open, so a test can do something else while it is in flight.
+    /// `gatedDelay` holds `consentGated()` open the same way; a real request takes a moment, as the network does,
+    /// but the SDK's ordering does not depend on that, so a test can set it to zero to prove it still holds.
     /// `refusalTaken` false is a server that did not take the first refusal. `gated` is what the site's config says,
     /// nil for no answer (offline, or an older API).
-    init(consentDelay: Duration = .zero, refusalTaken: Bool = true, gated: Bool? = nil) {
+    init(consentDelay: Duration = .zero, gatedDelay: Duration = .milliseconds(20), refusalTaken: Bool = true,
+         gated: Bool? = nil) {
         self.consentDelay = consentDelay
+        self.gatedDelay = gatedDelay
         self.refusalTaken = refusalTaken
         self.gated = gated
     }
@@ -52,10 +57,11 @@ final class RecordingSender: EventSender {
         return true
     }
 
-    // A real request takes a moment, as the network does, which is what lets the answer a host app passes straight
-    // after initialise arrive before the SDK decides whether to register with Apple.
+    // The SDK's decision about whether to tell Apple is queued ahead of this call, before it fires, so the delay
+    // here is not what keeps an answer the host app passes straight after initialise ahead of that decision; a test
+    // can set `gatedDelay` to zero to check that.
     func consentGated() async -> Bool? {
-        try? await Task.sleep(for: .milliseconds(20))
+        try? await Task.sleep(for: gatedDelay)
         return gated
     }
 

@@ -227,6 +227,20 @@ struct TraceClientTests {
         #expect(try appleFiles().isEmpty)
     }
 
+    // The same ordering, with the site answering instantly rather than after the network delay the other test gives
+    // it: this is what actually proves the refusal's place in the queue is reserved before the request is fired,
+    // rather than won by outrunning it.
+    @Test func onASiteThatIsNotGatedARefusalPassedAtLaunchComesBeforeRegisteringEvenWithNoNetworkDelay() async throws {
+        let registrar = FakeRegistrar()
+
+        await launch(RecordingSender(gatedDelay: .zero, gated: false), registrar) {
+            $0.setConsent(analytics: false, marketing: false)
+        }
+
+        #expect(registrar.updates.isEmpty)
+        #expect(try appleFiles().isEmpty)
+    }
+
     // A conversion made while the answer was no is not kept for a later yes: Trace drops it, and so does Apple.
     @Test func aGrantAfterARefusalRegistersThenAndSetsNothingFromWhileItWasNo() async throws {
         await launch(RecordingSender(gated: true)) { $0.setConsent(analytics: false, marketing: false) }
