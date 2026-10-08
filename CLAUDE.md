@@ -6,6 +6,12 @@ and Apple's postbacks in `apps/api/src/attribution-postbacks/`. The design is `d
 **Read `.claude/rules/app-tracking.md` in the `trace` repository before writing code here.** It holds the decisions
 this SDK must obey, and it is kept current. What follows is the subset that binds this repository.
 
+## Pull requests are reviewed by the shared review loop
+
+Every pull request is reviewed by use-trace/trace's review loop after CI passes: a reviewer reads the change against this
+file and the rules, and a fixer can push fixes. The ruleset requires `review-gate`, so nothing merges until the loop has
+approved it. Add `hold` to keep a pull request back.
+
 ## Working rules
 
 - British English in comments, documentation and commit messages. No em dashes or en dashes anywhere.
