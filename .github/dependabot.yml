@@ -5,6 +5,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    exclude-paths:
+      # A byte for byte copy of use-trace/trace's pr-loop.yml, whose action pins use-trace/trace owns. A bump here
+      # would only make the copy drift; use-trace/trace's workflow-copies.yml brings its bumps over in a pull request.
+      - .github/workflows/pr-loop.yml
   - package-ecosystem: swift
     directory: /
     schedule:
